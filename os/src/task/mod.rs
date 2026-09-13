@@ -9,9 +9,6 @@
 //! No borrow of the task manager's internal state may remain active across a
 //! context switch. Context pointers must remain valid for as long as they are used.
 
-// Allow unused items, imports, and parameters in the exercise skeleton.
-#![allow(dead_code, unused_imports, unused_variables)]
-
 mod context;
 mod switch;
 #[allow(clippy::module_inception)]
@@ -43,7 +40,7 @@ pub struct TaskManagerInner {
 }
 
 lazy_static! {
-    /// Todo: Initialize the global task manager for the loaded applications.
+    /// Initialize the global task manager for the loaded applications.
     ///
     /// Inputs: No arguments. The loader provides the application count and
     /// initial application contexts.
@@ -53,8 +50,58 @@ lazy_static! {
     /// per loaded application. Unused slots are `UnInit`, and all syscall counters
     /// start at zero.
     pub static ref TASK_MANAGER: TaskManager = {
-        todo!("task::TASK_MANAGER")
+        let num_app = get_num_app();
+        assert!((1..=MAX_APP_NUM).contains(&num_app));
+        let mut tasks = [TaskControlBlock {
+            task_status: TaskStatus::UnInit,
+            task_cx: TaskContext::zero_init(),
+            syscall_counts: [0; MAX_SYSCALL_NUM],
+        }; MAX_APP_NUM];
+        for (app_id, task) in tasks.iter_mut().enumerate().take(num_app) {
+            task.task_cx = TaskContext::goto_restore(init_app_cx(app_id));
+            task.task_status = TaskStatus::Ready;
+        }
+        TaskManager {
+            num_app,
+            // SAFETY: The kernel runs on one core and accesses this state with
+            // supervisor interrupts disabled.
+            inner: unsafe {
+                UPSafeCell::new(TaskManagerInner {
+                    tasks,
+                    current_task: 0,
+                })
+            },
+        }
     };
+}
+
+impl TaskManager {
+    fn run_next_task(&self) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let next = (1..=self.num_app)
+            .map(|offset| (current + offset) % self.num_app)
+            .find(|&task_id| inner.tasks[task_id].task_status == TaskStatus::Ready);
+        if let Some(next) = next {
+            inner.tasks[next].task_status = TaskStatus::Running;
+            inner.current_task = next;
+            if next == current {
+                return;
+            }
+            let current_task_cx_ptr = &mut inner.tasks[current].task_cx as *mut TaskContext;
+            let next_task_cx_ptr = &inner.tasks[next].task_cx as *const TaskContext;
+            drop(inner);
+            // SAFETY: Both contexts live in the global task array. No task
+            // manager borrow survives the switch, so the next task can borrow it.
+            unsafe {
+                __switch(current_task_cx_ptr, next_task_cx_ptr);
+            }
+        } else {
+            drop(inner);
+            println!("[kernel] All applications completed!");
+            crate::sbi::shutdown();
+        }
+    }
 }
 
 /// Record one system call made by the current task.
@@ -76,7 +123,7 @@ pub fn current_syscall_count(syscall_id: usize) -> usize {
         .unwrap_or(0)
 }
 
-/// Todo: Start the first task during kernel startup.
+/// Start the first task during kernel startup.
 ///
 /// Inputs: No arguments. Uses `TASK_MANAGER` after the applications have been loaded.
 /// Output: Application 0 begins execution; control does not return to the
@@ -84,10 +131,21 @@ pub fn current_syscall_count(syscall_id: usize) -> usize {
 /// Constraints: Used only for initial task startup. Task 0 is `Running` and is
 /// identified by `current_task`.
 pub fn run_first_task() {
-    todo!("task::run_first_task")
+    let mut inner = TASK_MANAGER.inner.exclusive_access();
+    inner.current_task = 0;
+    inner.tasks[0].task_status = TaskStatus::Running;
+    let next_task_cx_ptr = &inner.tasks[0].task_cx as *const TaskContext;
+    drop(inner);
+    let mut boot_task_cx = TaskContext::zero_init();
+    // SAFETY: The first task's context is stored in the global task array, and
+    // the boot stack remains valid. Its saved context is never scheduled again.
+    unsafe {
+        __switch(&mut boot_task_cx, next_task_cx_ptr);
+    }
+    unreachable!("The boot context must never resume");
 }
 
-/// Todo: Suspend the current task and yield the CPU.
+/// Suspend the current task and yield the CPU.
 ///
 /// Inputs: No arguments. The current task in `TASK_MANAGER` is `Running`.
 /// Output: Execution passes to the next ready task. This call returns `()` when
@@ -96,15 +154,26 @@ pub fn run_first_task() {
 /// retains the context needed to resume. This entry point must support both
 /// voluntary yielding and timer preemption.
 pub fn suspend_current_and_run_next() {
-    todo!("task::suspend_current_and_run_next")
+    {
+        let mut inner = TASK_MANAGER.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].task_status = TaskStatus::Ready;
+    }
+    TASK_MANAGER.run_next_task();
 }
 
-/// Todo: Exit the current task and relinquish the CPU.
+/// Exit the current task and relinquish the CPU.
 ///
 /// Inputs: No arguments. The current task in `TASK_MANAGER` is `Running`.
 /// Output: The current task terminates and yields execution to the next ready
 /// task; it never resumes at the call site.
 /// Constraints: The exiting task is `Exited` and must never be scheduled again.
 pub fn exit_current_and_run_next() {
-    todo!("task::exit_current_and_run_next")
+    {
+        let mut inner = TASK_MANAGER.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].task_status = TaskStatus::Exited;
+    }
+    TASK_MANAGER.run_next_task();
+    unreachable!("An exited task must never resume");
 }
