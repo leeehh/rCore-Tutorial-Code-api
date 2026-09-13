@@ -51,7 +51,7 @@ pub fn get_time_us() -> usize {
     time::read() * MICRO_PER_SEC / CLOCK_FREQ
 }
 
-/// 安排下一次时钟中断。
+/// Todo: 安排下一次时钟中断。
 ///
 /// 输入：无显式参数；当前硬件时间计数与 TICKS_PER_SEC 确定触发时刻。
 /// 输出：返回 ()，下一次时钟中断的触发时刻已设定。

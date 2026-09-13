@@ -55,7 +55,7 @@ lazy_static! {
 }
 
 impl TaskManager {
-    /// 创建已加载应用对应的任务管理器。
+    /// Todo: 创建已加载应用对应的任务管理器。
     ///
     /// 输入：无显式参数；应用已加载，数量与初始上下文由 loader 提供。
     /// 输出：有效任务均为 Ready 并具有首次运行上下文的管理器，current_task 为 0。
@@ -65,7 +65,7 @@ impl TaskManager {
         todo!("task::TaskManager::new")
     }
 
-    /// 首次启动任务执行。
+    /// Todo: 首次启动任务执行。
     ///
     /// 输入：self 为已初始化且尚未启动任务的管理器。
     /// 输出：执行权交给编号为 0 的应用；正常执行不返回。
@@ -75,7 +75,7 @@ impl TaskManager {
         todo!("task::TaskManager::run_first_task")
     }
 
-    /// 将当前任务标记为可再次运行。
+    /// Todo: 将当前任务标记为可再次运行。
     ///
     /// 输入：self 的 current_task 指向 Running 任务。
     /// 输出：返回 ()，当前任务的状态为 Ready。
@@ -84,7 +84,7 @@ impl TaskManager {
         todo!("task::TaskManager::mark_current_suspended")
     }
 
-    /// 将当前任务标记为已退出。
+    /// Todo: 将当前任务标记为已退出。
     ///
     /// 输入：self 的 current_task 指向 Running 任务。
     /// 输出：返回 ()，当前任务的状态为 Exited。
@@ -93,7 +93,7 @@ impl TaskManager {
         todo!("task::TaskManager::mark_current_exited")
     }
 
-    /// 选择下一次运行的任务。
+    /// Todo: 选择下一次运行的任务。
     ///
     /// 输入：self 中的有效任务数量、当前任务编号及各任务状态。
     /// 输出：Some(id) 表示选中的就绪任务编号；None 表示没有就绪任务。
@@ -103,7 +103,7 @@ impl TaskManager {
         todo!("task::TaskManager::find_next_task")
     }
 
-    /// 将执行权交给下一次运行的任务。
+    /// Todo: 将执行权交给下一次运行的任务。
     ///
     /// 输入：self 中的任务调度已经启动，当前任务已标记为 Ready 或 Exited。
     /// 输出：执行权交给选中的就绪任务；原任务恢复执行时，本调用返回 ()。
@@ -114,25 +114,17 @@ impl TaskManager {
     }
 }
 
-/// 已提供：记录当前任务的一次系统调用。
-///
-/// 输入：syscall_id 为系统调用编号，计数归属于 TASK_MANAGER 的当前任务。
-/// 输出：返回 ()，统计范围内的相应计数增加一次。
-/// 关键约束：统计范围为 0..MAX_SYSCALL_NUM；系统调用分发入口负责记录，
-/// 包含本次 sys_trace 调用，返回时释放任务管理器的借用。
+/// 记录当前任务的一次系统调用，返回时释放借用，供后续查询或调度使用。
 pub fn record_current_syscall(syscall_id: usize) {
     let mut inner = TASK_MANAGER.inner.exclusive_access();
     let current = inner.current_task;
+    // 超出数组范围的调用号交给系统调用分发入口处理。
     if let Some(count) = inner.tasks[current].syscall_counts.get_mut(syscall_id) {
         *count += 1;
     }
 }
 
-/// 已提供：查询当前任务的系统调用次数。
-///
-/// 输入：syscall_id 为待查询的系统调用编号。
-/// 输出：对应调用的累计次数；未记录的编号返回 0。
-/// 关键约束：查询只使用 TASK_MANAGER 当前任务的统计，计数由分发入口维护。
+/// 查询当前任务的系统调用次数；超出统计范围的编号尚未被调用，返回 0。
 pub fn current_syscall_count(syscall_id: usize) -> usize {
     let inner = TASK_MANAGER.inner.exclusive_access();
     inner.tasks[inner.current_task]
@@ -142,7 +134,7 @@ pub fn current_syscall_count(syscall_id: usize) -> usize {
         .unwrap_or(0)
 }
 
-/// 内核启动代码使用的首个任务入口。
+/// Todo: 内核启动代码使用的首个任务入口。
 ///
 /// 输入：无显式参数；应用已加载，依赖全局 TASK_MANAGER。
 /// 输出：首个应用开始执行；正常执行不返回启动代码。
@@ -151,7 +143,7 @@ pub fn run_first_task() {
     todo!("task::run_first_task")
 }
 
-/// 暂停当前任务并让出执行权。
+/// Todo: 暂停当前任务并让出执行权。
 ///
 /// 输入：无显式参数；TASK_MANAGER 的当前任务为 Running。
 /// 输出：当前任务重新获得执行权时返回 ()，继续原来的执行流。
@@ -160,7 +152,7 @@ pub fn suspend_current_and_run_next() {
     todo!("task::suspend_current_and_run_next")
 }
 
-/// 结束当前任务并交出执行权。
+/// Todo: 结束当前任务并交出执行权。
 ///
 /// 输入：无显式参数；TASK_MANAGER 的当前任务为 Running。
 /// 输出：当前任务结束执行；正常执行不返回该任务的调用点。

@@ -23,7 +23,7 @@ extern "C" {
 }
 
 impl TaskContext {
-    /// 创建空任务上下文。
+    /// Todo: 创建空任务上下文。
     ///
     /// 输入：无。
     /// 输出：ra、sp 以及 s 的所有元素均为 0 的 TaskContext。
@@ -32,7 +32,7 @@ impl TaskContext {
         todo!("task::TaskContext::zero_init")
     }
 
-    /// 创建应用首次运行所需的任务上下文。
+    /// Todo: 创建应用首次运行所需的任务上下文。
     ///
     /// 输入：kstack_ptr 为 loader::init_app_cx 返回的内核栈上 TrapContext 地址。
     /// 输出：可由 __switch 恢复、并通过 __restore 首次进入应用的 TaskContext。
