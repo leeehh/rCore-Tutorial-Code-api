@@ -1,26 +1,27 @@
-//! Types related to task management
+//! 第三章任务控制块及任务状态定义。
 
 use super::TaskContext;
 
-/// The task control block (TCB) of a task.
+/// 静态加载应用对应的任务控制块。
+///
+/// 每个有效任务由任务数组中的索引标识，其状态与上下文共同描述执行状态。
 #[derive(Copy, Clone)]
 pub struct TaskControlBlock {
-    /// The task status in it's lifecycle
+    /// 任务的当前生命周期状态。
     pub task_status: TaskStatus,
-    /// The task context
+    /// 任务在内核中暂停或恢复执行所需的寄存器上下文。
     pub task_cx: TaskContext,
-    // TODO: You may need to add some fields to store the necessary information.
 }
 
-/// The status of a task
+/// 任务的生命周期状态。
 #[derive(Copy, Clone, PartialEq)]
 pub enum TaskStatus {
-    /// uninitialized
+    /// 尚未初始化的任务槽位。
     UnInit,
-    /// ready to run
+    /// 已就绪，具备被调度运行的条件。
     Ready,
-    /// running
+    /// 当前正在运行的任务。
     Running,
-    /// exited
+    /// 已结束执行的任务；该状态为终态。
     Exited,
 }

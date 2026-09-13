@@ -1,13 +1,20 @@
-//! Task management implementation
+//! 第三章任务管理模块：管理静态加载的应用及其执行上下文。
 //!
-//! Everything about task management, like starting and switching tasks is
-//! implemented here.
+//! 输入：加载器提供的应用数量、初始上下文，以及启动、暂停和退出请求。
+//! 输出：应用的运行状态与任务之间的执行权转移。
+//! 关键约束：有效任务编号为 0..num_app，采用轮转调度，运行环境为单核。
+//! 正在执行的任务对应 current_task，Exited 是任务的终态。
 //!
-//! A single global instance of [`TaskManager`] called `TASK_MANAGER` controls
-//! all the tasks in the operating system.
+//! 已提供的依赖接口：
+//! - loader::get_num_app 返回实际应用数量。
+//! - loader::init_app_cx 为指定应用构造初始 TrapContext，返回其在内核栈上的地址。
+//! - UPSafeCell::exclusive_access 提供内部数据的动态可变借用。
+//! - switch::__switch 提供任务上下文切换，实现在 switch.S 中。
 //!
-//! Be careful when you see `__switch` ASM function in `switch.S`. Control flow around this function
-//! might not be what you expect.
+//! 跨越上下文切换时，不得持有任务管理器内部数据的动态借用。
+
+// TODO 骨架保留了供实现使用的接口、导入和参数，允许它们暂时未被使用。
+#![allow(dead_code, unused_imports, unused_variables)]
 
 mod context;
 mod switch;
@@ -17,165 +24,118 @@ mod task;
 use crate::config::MAX_APP_NUM;
 use crate::loader::{get_num_app, init_app_cx};
 use crate::sync::UPSafeCell;
-use lazy_static::*;
+use lazy_static::lazy_static;
 use switch::__switch;
-pub use task::{TaskControlBlock, TaskStatus};
 
 pub use context::TaskContext;
+pub use task::{TaskControlBlock, TaskStatus};
 
-/// The task manager, where all the tasks are managed.
+/// 静态应用的任务管理器。
 ///
-/// Functions implemented on `TaskManager` deals with all task state transitions
-/// and task context switching. For convenience, you can find wrappers around it
-/// in the module level.
-///
-/// Most of `TaskManager` are hidden behind the field `inner`, to defer
-/// borrowing checks to runtime. You can see examples on how to use `inner` in
-/// existing functions on `TaskManager`.
+/// num_app 确定有效任务范围；可变的任务状态和上下文由 inner 管理。
 pub struct TaskManager {
-    /// total number of tasks
+    /// 实际加载的应用数量，满足 1 <= num_app <= MAX_APP_NUM。
     num_app: usize,
-    /// use inner value to get mutable access
+    /// 单核环境下可动态借用的任务管理状态。
     inner: UPSafeCell<TaskManagerInner>,
 }
 
-/// Inner of Task Manager
+/// 任务管理器的内部可变状态。
 pub struct TaskManagerInner {
-    /// task list
+    /// 按任务编号索引的控制块数组，0..num_app 对应有效应用。
     tasks: [TaskControlBlock; MAX_APP_NUM],
-    /// id of current `Running` task
+    /// 当前任务编号；首次启动前为 0，运行期间指向当前任务。
     current_task: usize,
 }
 
 lazy_static! {
-    /// Global variable: TASK_MANAGER
-    pub static ref TASK_MANAGER: TaskManager = {
-        let num_app = get_num_app();
-        let mut tasks = [TaskControlBlock {
-            task_cx: TaskContext::zero_init(),
-            task_status: TaskStatus::UnInit,
-        }; MAX_APP_NUM];
-        for (i, task) in tasks.iter_mut().enumerate() {
-            task.task_cx = TaskContext::goto_restore(init_app_cx(i));
-            task.task_status = TaskStatus::Ready;
-        }
-        TaskManager {
-            num_app,
-            inner: unsafe {
-                UPSafeCell::new(TaskManagerInner {
-                    tasks,
-                    current_task: 0,
-                })
-            },
-        }
-    };
+    /// 全局任务管理器，在首次访问时创建，任务上下文具有稳定的存储位置。
+    pub static ref TASK_MANAGER: TaskManager = TaskManager::new();
 }
 
 impl TaskManager {
-    /// Run the first task in task list.
+    /// 创建已加载应用对应的任务管理器。
     ///
-    /// Generally, the first task in task list is an idle task (we call it zero process later).
-    /// But in ch3, we load apps statically, so the first task is a real app.
+    /// 输入：无显式参数；应用已加载，数量与初始上下文由 loader 提供。
+    /// 输出：有效任务均为 Ready 并具有首次运行上下文的管理器，current_task 为 0。
+    /// 关键约束：应用数量处于 1..=MAX_APP_NUM；有效任务与加载的应用一一对应，
+    /// 其余任务槽位为 UnInit。
+    fn new() -> Self {
+        todo!("task::TaskManager::new")
+    }
+
+    /// 首次启动任务执行。
+    ///
+    /// 输入：self 为已初始化且尚未启动任务的管理器。
+    /// 输出：执行权交给编号为 0 的应用；正常执行不返回。
+    /// 关键约束：首个任务的状态为 Running，current_task 与之对应；
+    /// 切换时不得持有 inner 的动态借用。
     fn run_first_task(&self) -> ! {
-        let mut inner = self.inner.exclusive_access();
-        let task0 = &mut inner.tasks[0];
-        task0.task_status = TaskStatus::Running;
-        let next_task_cx_ptr = &task0.task_cx as *const TaskContext;
-        drop(inner);
-        let mut _unused = TaskContext::zero_init();
-        // before this, we should drop local variables that must be dropped manually
-        unsafe {
-            __switch(&mut _unused as *mut TaskContext, next_task_cx_ptr);
-        }
-        panic!("unreachable in run_first_task!");
+        todo!("task::TaskManager::run_first_task")
     }
 
-    /// Change the status of current `Running` task into `Ready`.
-    fn mark_current_suspended(&self) {
-        let mut inner = self.inner.exclusive_access();
-        let current = inner.current_task;
-        inner.tasks[current].task_status = TaskStatus::Ready;
-    }
-
-    /// Change the status of current `Running` task into `Exited`.
-    fn mark_current_exited(&self) {
-        let mut inner = self.inner.exclusive_access();
-        let current = inner.current_task;
-        inner.tasks[current].task_status = TaskStatus::Exited;
-    }
-
-    /// Find next task to run and return task id.
+    /// 将当前任务标记为可再次运行。
     ///
-    /// In this case, we only return the first `Ready` task in task list.
+    /// 输入：self 的 current_task 指向 Running 任务。
+    /// 输出：返回 ()，当前任务的状态为 Ready。
+    /// 关键约束：该任务仍保有恢复执行所需的上下文。
+    fn mark_current_suspended(&self) {
+        todo!("task::TaskManager::mark_current_suspended")
+    }
+
+    /// 将当前任务标记为已退出。
+    ///
+    /// 输入：self 的 current_task 指向 Running 任务。
+    /// 输出：返回 ()，当前任务的状态为 Exited。
+    /// 关键约束：Exited 任务不再参与后续调度。
+    fn mark_current_exited(&self) {
+        todo!("task::TaskManager::mark_current_exited")
+    }
+
+    /// 选择下一次运行的任务。
+    ///
+    /// 输入：self 中的有效任务数量、当前任务编号及各任务状态。
+    /// 输出：Some(id) 表示选中的就绪任务编号；None 表示没有就绪任务。
+    /// 关键约束：返回编号位于 0..num_app，且对应任务为 Ready；
+    /// 就绪任务的调度优先级按当前编号之后的循环编号顺序排列。
     fn find_next_task(&self) -> Option<usize> {
-        let inner = self.inner.exclusive_access();
-        let current = inner.current_task;
-        (current + 1..current + self.num_app + 1)
-            .map(|id| id % self.num_app)
-            .find(|id| inner.tasks[*id].task_status == TaskStatus::Ready)
+        todo!("task::TaskManager::find_next_task")
     }
 
-    /// Switch current `Running` task to the task we have found,
-    /// or there is no `Ready` task and we can exit with all applications completed
+    /// 将执行权交给下一次运行的任务。
+    ///
+    /// 输入：self 中的任务调度已经启动，当前任务已标记为 Ready 或 Exited。
+    /// 输出：执行权交给选中的就绪任务；原任务恢复执行时，本调用返回 ()。
+    /// 关键约束：current_task 与实际运行任务一致，其状态为 Running；
+    /// 切换时不得持有 inner 的动态借用，上下文指针所指存储必须持续有效。
     fn run_next_task(&self) {
-        if let Some(next) = self.find_next_task() {
-            let mut inner = self.inner.exclusive_access();
-            let current = inner.current_task;
-            inner.tasks[next].task_status = TaskStatus::Running;
-            inner.current_task = next;
-            let current_task_cx_ptr = &mut inner.tasks[current].task_cx as *mut TaskContext;
-            let next_task_cx_ptr = &inner.tasks[next].task_cx as *const TaskContext;
-            drop(inner);
-            // before this, we should drop local variables that must be dropped manually
-            unsafe {
-                __switch(current_task_cx_ptr, next_task_cx_ptr);
-            }
-            // go back to user mode
-        } else {
-            panic!("All applications completed!");
-        }
+        todo!("task::TaskManager::run_next_task")
     }
 }
 
-/// Run the first task in task list.
+/// 内核启动代码使用的首个任务入口。
+///
+/// 输入：无显式参数；应用已加载，依赖全局 TASK_MANAGER。
+/// 输出：首个应用开始执行；正常执行不返回启动代码。
+/// 关键约束：仅用于首次启动任务，保留与启动框架约定的函数签名。
 pub fn run_first_task() {
-    TASK_MANAGER.run_first_task();
+    todo!("task::run_first_task")
 }
 
-/// Switch current `Running` task to the task we have found,
-/// or there is no `Ready` task and we can exit with all applications completed
-fn run_next_task() {
-    TASK_MANAGER.run_next_task();
-}
-
-/// Change the status of current `Running` task into `Ready`.
-fn mark_current_suspended() {
-    TASK_MANAGER.mark_current_suspended();
-}
-
-/// Change the status of current `Running` task into `Exited`.
-fn mark_current_exited() {
-    TASK_MANAGER.mark_current_exited();
-}
-
-/// Suspend the current 'Running' task and run the next task in task list.
+/// 暂停当前任务并让出执行权。
+///
+/// 输入：无显式参数；TASK_MANAGER 的当前任务为 Running。
+/// 输出：当前任务重新获得执行权时返回 ()，继续原来的执行流。
+/// 关键约束：暂停的任务保持可再次调度；适用于主动让出 CPU 和时钟抢占。
 pub fn suspend_current_and_run_next() {
-    mark_current_suspended();
-    run_next_task();
+    todo!("task::suspend_current_and_run_next")
 }
 
-/// Exit the current 'Running' task and run the next task in task list.
+/// 结束当前任务并交出执行权。
+///
+/// 输入：无显式参数；TASK_MANAGER 的当前任务为 Running。
+/// 输出：当前任务结束执行；正常执行不返回该任务的调用点。
+/// 关键约束：退出的任务处于 Exited 状态，后续调度不会再次运行它。
 pub fn exit_current_and_run_next() {
-    mark_current_exited();
-    run_next_task();
-}
-
-/// TODO: Record a syscall made by the current task for later queries or scheduling.
-pub fn record_current_syscall(_syscall_id: usize) {
-    todo!("not implemented yet");
-}
-
-/// TODO: Query the current task's syscall count, returning 0 if the ID is outside the tracked range.
-pub fn current_syscall_count(_syscall_id: usize) -> usize {
-    todo!("not implemented yet");
+    todo!("task::exit_current_and_run_next")
 }
