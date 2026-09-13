@@ -1,30 +1,31 @@
-//! 第三章任务控制块及任务状态定义。
+//! Task control blocks and task states for chapter 3.
 
 use super::TaskContext;
 use crate::config::MAX_SYSCALL_NUM;
 
-/// 静态加载应用对应的任务控制块。
+/// Task control block for a statically loaded application.
 ///
-/// 每个有效任务由任务数组中的索引标识，其状态与上下文共同描述执行状态。
+/// Each loaded task is identified by its index in the task array. Its status and
+/// context describe its execution state.
 #[derive(Copy, Clone)]
 pub struct TaskControlBlock {
-    /// 任务的当前生命周期状态。
+    /// Current state in the task's lifecycle.
     pub task_status: TaskStatus,
-    /// 任务在内核中暂停或恢复执行所需的寄存器上下文。
+    /// Kernel register context used when suspending or resuming the task.
     pub task_cx: TaskContext,
-    /// 已提供的 sys_trace 使用的系统调用计数；每个任务独立持有，初值均为 0。
+    /// Syscall counters for the provided `sys_trace`, initialized to zero for each task.
     pub syscall_counts: [usize; MAX_SYSCALL_NUM],
 }
 
-/// 任务的生命周期状态。
+/// A task's lifecycle state.
 #[derive(Copy, Clone, PartialEq)]
 pub enum TaskStatus {
-    /// 尚未初始化的任务槽位。
+    /// Uninitialized task slot.
     UnInit,
-    /// 已就绪，具备被调度运行的条件。
+    /// Ready to be scheduled.
     Ready,
-    /// 当前正在运行的任务。
+    /// Currently executing.
     Running,
-    /// 已结束执行的任务；该状态为终态。
+    /// Finished execution; a terminal state.
     Exited,
 }

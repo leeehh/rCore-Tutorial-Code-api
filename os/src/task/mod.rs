@@ -1,8 +1,9 @@
-//! 第三章任务管理，系统调用统计接口已提供。
+//! Task management for chapter 3, with syscall accounting provided.
 //!
-//! 运行环境为单核；上下文切换时不得持有任务管理器内部数据的动态借用。
+//! This kernel runs on a single core. No borrow of the task manager's internal
+//! state may remain active across a context switch.
 
-// 允许骨架中尚未使用的定义、导入和参数。
+// Allow unused items, imports, and parameters in the exercise skeleton.
 #![allow(dead_code, unused_imports, unused_variables)]
 
 mod context;
@@ -19,88 +20,94 @@ use switch::__switch;
 pub use context::TaskContext;
 pub use task::{TaskControlBlock, TaskStatus};
 
-/// 静态应用的任务管理器。
+/// Manages the statically loaded applications.
 pub struct TaskManager {
-    /// 实际加载的应用数量，满足 1 <= num_app <= MAX_APP_NUM。
+    /// Number of loaded applications, in `1..=MAX_APP_NUM`.
     num_app: usize,
-    /// 单核环境下可动态借用的任务管理状态。
+    /// Mutable task management state with runtime borrow checking.
     inner: UPSafeCell<TaskManagerInner>,
 }
 
-/// 任务管理器的内部可变状态。
+/// Mutable state of the task manager.
 pub struct TaskManagerInner {
-    /// 按任务编号索引的控制块数组，0..num_app 对应有效应用。
+    /// Task control blocks indexed by task ID; `0..num_app` covers loaded applications.
     tasks: [TaskControlBlock; MAX_APP_NUM],
-    /// 当前任务编号；首次启动前为 0，运行期间指向当前任务。
+    /// ID of the current task; initialized to 0 before any task starts.
     current_task: usize,
 }
 
 lazy_static! {
-    /// 全局任务管理器。
+    /// Global task manager.
     pub static ref TASK_MANAGER: TaskManager = TaskManager::new();
 }
 
 impl TaskManager {
-    /// Todo: 创建已加载应用对应的任务管理器。
+    /// Todo: Create a task manager for the loaded applications.
     ///
-    /// 输入：无显式参数；应用已加载，数量与初始上下文由 loader 提供。
-    /// 输出：有效任务均为 Ready 并具有首次运行上下文的管理器，current_task 为 0。
-    /// 关键约束：应用数量处于 1..=MAX_APP_NUM；有效任务与加载的应用一一对应，
-    /// 其余任务槽位为 UnInit；每个任务的 syscall_counts 初值均为 0。
+    /// Inputs: No arguments. The loader provides the application count and
+    /// initial application contexts.
+    /// Output: A task manager whose loaded tasks are `Ready`, each with a context
+    /// for its first run, and whose `current_task` is 0.
+    /// Constraints: The application count is in `1..=MAX_APP_NUM`, with one task
+    /// per loaded application. Unused slots are `UnInit`, and all syscall counters
+    /// start at zero.
     fn new() -> Self {
         todo!("task::TaskManager::new")
     }
 
-    /// Todo: 首次启动任务执行。
+    /// Todo: Start the first task.
     ///
-    /// 输入：self 为已初始化且尚未启动任务的管理器。
-    /// 输出：执行权交给编号为 0 的应用；正常执行不返回。
-    /// 关键约束：首个任务的状态为 Running，current_task 与之对应；
-    /// 切换时不得持有 inner 的动态借用。
+    /// Inputs: `self` is initialized and has not started any task.
+    /// Output: Application 0 begins execution. This function does not return.
+    /// Constraints: Task 0 is `Running` and is identified by `current_task`.
+    /// No borrow of `inner` may remain active across the context switch.
     fn run_first_task(&self) -> ! {
         todo!("task::TaskManager::run_first_task")
     }
 
-    /// Todo: 将当前任务标记为可再次运行。
+    /// Todo: Mark the current task as ready to run again.
     ///
-    /// 输入：self 的 current_task 指向 Running 任务。
-    /// 输出：返回 ()，当前任务的状态为 Ready。
-    /// 关键约束：该任务仍保有恢复执行所需的上下文。
+    /// Inputs: `current_task` identifies a `Running` task in `self`.
+    /// Output: Returns `()` with the current task in the `Ready` state.
+    /// Constraints: The task retains the context needed to resume execution.
     fn mark_current_suspended(&self) {
         todo!("task::TaskManager::mark_current_suspended")
     }
 
-    /// Todo: 将当前任务标记为已退出。
+    /// Todo: Mark the current task as exited.
     ///
-    /// 输入：self 的 current_task 指向 Running 任务。
-    /// 输出：返回 ()，当前任务的状态为 Exited。
-    /// 关键约束：Exited 任务不再参与后续调度。
+    /// Inputs: `current_task` identifies a `Running` task in `self`.
+    /// Output: Returns `()` with the current task in the `Exited` state.
+    /// Constraints: Exited tasks must never be scheduled again.
     fn mark_current_exited(&self) {
         todo!("task::TaskManager::mark_current_exited")
     }
 
-    /// Todo: 选择下一次运行的任务。
+    /// Todo: Select the next ready task.
     ///
-    /// 输入：self 中的有效任务数量、当前任务编号及各任务状态。
-    /// 输出：Some(id) 表示选中的就绪任务编号；None 表示没有就绪任务。
-    /// 关键约束：返回编号位于 0..num_app，且对应任务为 Ready；
-    /// 就绪任务的调度优先级按当前编号之后的循环编号顺序排列。
+    /// Inputs: The number of loaded tasks, the current task ID, and task states in `self`.
+    /// Output: `Some(id)` for the selected ready task, or `None` if no task is ready.
+    /// Constraints: The selected ID is in `0..num_app` and identifies a `Ready` task.
+    /// Selection follows round-robin order by task ID, starting after `current_task`.
     fn find_next_task(&self) -> Option<usize> {
         todo!("task::TaskManager::find_next_task")
     }
 
-    /// Todo: 将执行权交给下一次运行的任务。
+    /// Todo: Switch to the next ready task.
     ///
-    /// 输入：self 中的任务调度已经启动，当前任务已标记为 Ready 或 Exited。
-    /// 输出：执行权交给选中的就绪任务；原任务恢复执行时，本调用返回 ()。
-    /// 关键约束：current_task 与实际运行任务一致，其状态为 Running；
-    /// 切换时不得持有 inner 的动态借用，上下文指针所指存储必须持续有效。
+    /// Inputs: `self` has already started scheduling tasks. The current task is
+    /// `Ready` or `Exited`.
+    /// Output: The selected task takes over execution. This call returns `()`
+    /// only when the original task resumes.
+    /// Constraints: `current_task` identifies the task now running, whose state
+    /// is `Running`. Context pointers must remain valid, and no borrow of `inner`
+    /// may remain active across the context switch.
     fn run_next_task(&self) {
         todo!("task::TaskManager::run_next_task")
     }
 }
 
-/// 记录当前任务的一次系统调用。
+/// Record one system call made by the current task.
 pub fn record_current_syscall(syscall_id: usize) {
     let mut inner = TASK_MANAGER.inner.exclusive_access();
     let current = inner.current_task;
@@ -109,7 +116,7 @@ pub fn record_current_syscall(syscall_id: usize) {
     }
 }
 
-/// 查询当前任务的系统调用次数。
+/// Return the current task's call count for the given syscall ID.
 pub fn current_syscall_count(syscall_id: usize) -> usize {
     let inner = TASK_MANAGER.inner.exclusive_access();
     inner.tasks[inner.current_task]
@@ -119,29 +126,32 @@ pub fn current_syscall_count(syscall_id: usize) -> usize {
         .unwrap_or(0)
 }
 
-/// Todo: 内核启动代码使用的首个任务入口。
+/// Todo: Start the first task during kernel startup.
 ///
-/// 输入：无显式参数；应用已加载，依赖全局 TASK_MANAGER。
-/// 输出：首个应用开始执行；正常执行不返回启动代码。
-/// 关键约束：仅用于首次启动任务，保留与启动框架约定的函数签名。
+/// Inputs: No arguments. Uses `TASK_MANAGER` after the applications have been loaded.
+/// Output: The first application begins execution; control does not return to the
+/// startup code.
+/// Constraints: This entry point is only for initial task startup and must retain
+/// the signature expected by the kernel's startup code.
 pub fn run_first_task() {
     todo!("task::run_first_task")
 }
 
-/// Todo: 暂停当前任务并让出执行权。
+/// Todo: Suspend the current task and yield the CPU.
 ///
-/// 输入：无显式参数；TASK_MANAGER 的当前任务为 Running。
-/// 输出：当前任务重新获得执行权时返回 ()，继续原来的执行流。
-/// 关键约束：暂停的任务保持可再次调度；适用于主动让出 CPU 和时钟抢占。
+/// Inputs: No arguments. The current task in `TASK_MANAGER` is `Running`.
+/// Output: Returns `()` when the current task resumes execution.
+/// Constraints: The suspended task remains eligible to run. This entry point
+/// must support both voluntary yielding and timer preemption.
 pub fn suspend_current_and_run_next() {
     todo!("task::suspend_current_and_run_next")
 }
 
-/// Todo: 结束当前任务并交出执行权。
+/// Todo: Exit the current task and relinquish the CPU.
 ///
-/// 输入：无显式参数；TASK_MANAGER 的当前任务为 Running。
-/// 输出：当前任务结束执行；正常执行不返回该任务的调用点。
-/// 关键约束：退出的任务处于 Exited 状态，后续调度不会再次运行它。
+/// Inputs: No arguments. The current task in `TASK_MANAGER` is `Running`.
+/// Output: The current task terminates and does not resume at the call site.
+/// Constraints: The task is `Exited` and must never be scheduled again.
 pub fn exit_current_and_run_next() {
     todo!("task::exit_current_and_run_next")
 }
