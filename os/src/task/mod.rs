@@ -14,7 +14,7 @@ mod switch;
 #[allow(clippy::module_inception)]
 mod task;
 
-use crate::config::MAX_APP_NUM;
+use crate::config::{MAX_APP_NUM, MAX_SYSCALL_NUM};
 use crate::loader::{get_num_app, init_app_cx};
 use crate::sync::UPSafeCell;
 use lazy_static::*;
@@ -54,6 +54,8 @@ lazy_static! {
         let mut tasks = [TaskControlBlock {
             task_cx: TaskContext::zero_init(),
             task_status: TaskStatus::UnInit,
+            // 每个任务独立计数，初始时尚未发起系统调用。
+            syscall_counts: [0; MAX_SYSCALL_NUM],
         }; MAX_APP_NUM];
         for (i, task) in tasks.iter_mut().enumerate() {
             task.task_cx = TaskContext::goto_restore(init_app_cx(i));
@@ -137,6 +139,26 @@ impl TaskManager {
     }
 }
 
+/// 记录当前任务的一次系统调用，返回时释放借用，供后续查询或调度使用。
+pub fn record_current_syscall(syscall_id: usize) {
+    let mut inner = TASK_MANAGER.inner.exclusive_access();
+    let current = inner.current_task;
+    // 超出数组范围的调用号交给系统调用分发入口处理。
+    if let Some(count) = inner.tasks[current].syscall_counts.get_mut(syscall_id) {
+        *count += 1;
+    }
+}
+
+/// 查询当前任务的系统调用次数；超出统计范围的编号尚未被调用，返回 0。
+pub fn current_syscall_count(syscall_id: usize) -> usize {
+    let inner = TASK_MANAGER.inner.exclusive_access();
+    inner.tasks[inner.current_task]
+        .syscall_counts
+        .get(syscall_id)
+        .copied()
+        .unwrap_or(0)
+}
+
 /// Run the first task in task list.
 pub fn run_first_task() {
     TASK_MANAGER.run_first_task();
@@ -168,14 +190,4 @@ pub fn suspend_current_and_run_next() {
 pub fn exit_current_and_run_next() {
     mark_current_exited();
     run_next_task();
-}
-
-/// TODO: Record a syscall made by the current task for later queries or scheduling.
-pub fn record_current_syscall(_syscall_id: usize) {
-    todo!("not implemented yet");
-}
-
-/// TODO: Query the current task's syscall count, returning 0 if the ID is outside the tracked range.
-pub fn current_syscall_count(_syscall_id: usize) -> usize {
-    todo!("not implemented yet");
 }
