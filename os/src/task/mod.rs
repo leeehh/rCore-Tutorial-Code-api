@@ -1,20 +1,8 @@
-//! 第三章任务管理模块：管理静态加载的应用及其执行上下文。
+//! 第三章任务管理，系统调用统计接口已提供。
 //!
-//! 输入：加载器提供的应用数量、初始上下文，以及启动、暂停和退出请求。
-//! 输出：应用的运行状态与任务之间的执行权转移。
-//! 关键约束：有效任务编号为 0..num_app，采用轮转调度，运行环境为单核。
-//! 正在执行的任务对应 current_task，Exited 是任务的终态。
-//!
-//! 已提供的依赖接口：
-//! - loader::get_num_app 返回实际应用数量。
-//! - loader::init_app_cx 为指定应用构造初始 TrapContext，返回其在内核栈上的地址。
-//! - UPSafeCell::exclusive_access 提供内部数据的动态可变借用。
-//! - switch::__switch 提供任务上下文切换，实现在 switch.S 中。
-//!
-//! 跨越上下文切换时，不得持有任务管理器内部数据的动态借用。
-//! record_current_syscall 和 current_syscall_count 已完整提供，供 sys_trace 使用。
+//! 运行环境为单核；上下文切换时不得持有任务管理器内部数据的动态借用。
 
-// TODO 骨架保留了供实现使用的接口、导入和参数，允许它们暂时未被使用。
+// 允许骨架中尚未使用的定义、导入和参数。
 #![allow(dead_code, unused_imports, unused_variables)]
 
 mod context;
@@ -32,8 +20,6 @@ pub use context::TaskContext;
 pub use task::{TaskControlBlock, TaskStatus};
 
 /// 静态应用的任务管理器。
-///
-/// num_app 确定有效任务范围；可变的任务状态和上下文由 inner 管理。
 pub struct TaskManager {
     /// 实际加载的应用数量，满足 1 <= num_app <= MAX_APP_NUM。
     num_app: usize,
@@ -50,7 +36,7 @@ pub struct TaskManagerInner {
 }
 
 lazy_static! {
-    /// 全局任务管理器，在首次访问时创建，任务上下文具有稳定的存储位置。
+    /// 全局任务管理器。
     pub static ref TASK_MANAGER: TaskManager = TaskManager::new();
 }
 
@@ -114,17 +100,16 @@ impl TaskManager {
     }
 }
 
-/// 记录当前任务的一次系统调用，返回时释放借用，供后续查询或调度使用。
+/// 记录当前任务的一次系统调用。
 pub fn record_current_syscall(syscall_id: usize) {
     let mut inner = TASK_MANAGER.inner.exclusive_access();
     let current = inner.current_task;
-    // 超出数组范围的调用号交给系统调用分发入口处理。
     if let Some(count) = inner.tasks[current].syscall_counts.get_mut(syscall_id) {
         *count += 1;
     }
 }
 
-/// 查询当前任务的系统调用次数；超出统计范围的编号尚未被调用，返回 0。
+/// 查询当前任务的系统调用次数。
 pub fn current_syscall_count(syscall_id: usize) -> usize {
     let inner = TASK_MANAGER.inner.exclusive_access();
     inner.tasks[inner.current_task]
