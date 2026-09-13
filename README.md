@@ -1,44 +1,5 @@
 # rCore-Tutorial-Code
 
-## ch3-api 实验
-
-本分支提供第三章的接口实验骨架。学生借助 AI，根据给定的数据定义与函数契约，
-完成任务管理和时钟中断设置。函数注释只描述输入、输出和关键约束，内部实现方式由学生决定。
-
-| 文件 | 提供内容 | 待实现内容 |
-| --- | --- | --- |
-| `os/src/task/task.rs` | 任务控制块、任务状态及系统调用计数字段 | 无 |
-| `os/src/task/context.rs` | 上下文布局与汇编入口声明 | 2 个上下文构造函数 |
-| `os/src/task/mod.rs` | 管理器类型、全局实例、统计实现与接口定义 | 9 个初始化及任务管理函数 |
-| `os/src/task/switch.rs` | 汇编切换接口与调用约束 | 无 |
-| `os/src/timer.rs` | 时钟常量、时间查询实现与接口定义 | `set_next_trigger()` |
-| `os/src/syscall/` | 现有系统调用、完整的 `sys_trace` 及统计接入 | 无 |
-
-共 12 处函数体使用 `todo!()`。任务管理器的初始化从原 `lazy_static!` 块提取为
-`TaskManager::new()`。模块对外接口与框架兼容，学生可自行组织内部辅助函数。
-
-`sys_trace()`、`record_current_syscall()`、`current_syscall_count()` 的完整实现
-来自 `ch3` 分支，作为框架直接提供。创建任务时，`syscall_counts` 的所有计数初值为 0。
-
-`switch.S`、其他汇编代码、链接脚本及配套内核模块均直接提供。
-本实验的 Rust 实现范围为 `task` 的任务管理逻辑与 `timer::set_next_trigger()`。
-
-环境配置沿用下文说明。在 `ch3-api` 分支上运行：
-
-```bash
-cd os
-make run
-```
-
-命令沿用第三章现有基础应用，默认 `BASE=1`。当前骨架会在未实现接口处停止；
-补全后使用同一命令验收，现有应用应执行完成。原内核以
-`All applications completed!` 消息结束全部应用的运行。
-
-接口契约以本仓库第三章代码为依据，阅读材料为
-[rCore 实验指导书](https://learningos.cn/rCore-Tutorial-Guide/)；
-描述粒度参考
-[rCore-Tutorial-v3 API 文档](https://github.com/rcore-os/rCore-Tutorial-v3-api-doc/blob/main/rCore-Tutorial-v3.md)。
-
 ## Code
 
 - [Soure Code of labs](https://github.com/LearningOS/rCore-Tutorial-Code)
