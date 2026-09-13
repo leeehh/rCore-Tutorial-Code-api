@@ -1,5 +1,7 @@
 //! 第三章时间读取与时钟中断设置接口。
 //!
+//! 时间查询函数直接提供，待实现接口为 set_next_trigger。
+//!
 //! 输入：RISC-V 硬件时间计数、平台时钟频率及目标时钟中断频率。
 //! 输出：硬件计数或换算后的时间，以及下一次时钟中断的触发时刻。
 //! 关键约束：所有读数采用同一硬件时间基准，CLOCK_FREQ 的单位为 tick/秒。
@@ -28,7 +30,7 @@ const MICRO_PER_SEC: usize = 1_000_000;
 /// 输出：usize 类型的当前计数，单位为 tick。
 /// 关键约束：每秒对应 CLOCK_FREQ 个 tick，与其他时间读取接口采用相同基准。
 pub fn get_time() -> usize {
-    todo!("timer::get_time")
+    time::read()
 }
 
 /// 获取以毫秒表示的当前时间。
@@ -37,7 +39,7 @@ pub fn get_time() -> usize {
 /// 输出：usize 类型的毫秒数，取换算结果的整数部分。
 /// 关键约束：时间基准与 get_time 一致，一秒对应 MSEC_PER_SEC 毫秒。
 pub fn get_time_ms() -> usize {
-    todo!("timer::get_time_ms")
+    time::read() * MSEC_PER_SEC / CLOCK_FREQ
 }
 
 /// 获取以微秒表示的当前时间。
@@ -46,7 +48,7 @@ pub fn get_time_ms() -> usize {
 /// 输出：usize 类型的微秒数，取换算结果的整数部分。
 /// 关键约束：时间基准与 get_time 一致，一秒对应 MICRO_PER_SEC 微秒。
 pub fn get_time_us() -> usize {
-    todo!("timer::get_time_us")
+    time::read() * MICRO_PER_SEC / CLOCK_FREQ
 }
 
 /// 安排下一次时钟中断。
