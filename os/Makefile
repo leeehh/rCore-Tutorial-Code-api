@@ -1,9 +1,17 @@
 # Building
 TARGET := riscv64gc-unknown-none-elf
 MODE := release
-KERNEL_ELF := target/$(TARGET)/$(MODE)/os
+
+# Keep concurrent Cargo artifact access off host-shared container mounts.
+ifneq ($(wildcard /.dockerenv /run/.containerenv),)
+BUILD_CACHE ?= /tmp/rcore-build-$(shell id -u)/$(shell pwd -P | cksum | cut -d ' ' -f 1)
+endif
+KERNEL_TARGET_DIR := $(if $(BUILD_CACHE),$(BUILD_CACHE)/os,target)
+USER_TARGET_DIR := $(if $(BUILD_CACHE),$(BUILD_CACHE)/user,$(abspath ../user/target))
+
+KERNEL_ELF := $(KERNEL_TARGET_DIR)/$(TARGET)/$(MODE)/os
 KERNEL_BIN := $(KERNEL_ELF).bin
-DISASM_TMP := target/$(TARGET)/$(MODE)/asm
+DISASM_TMP := $(KERNEL_TARGET_DIR)/$(TARGET)/$(MODE)/asm
 OFFLINE :=
 
 # BOARD
@@ -44,12 +52,14 @@ $(KERNEL_BIN): kernel
 	@$(OBJCOPY) $(KERNEL_ELF) --strip-all -O binary $@
 
 kernel:
-	@make -C ../user build TEST=$(TEST) CHAPTER=$(CHAPTER) BASE=$(BASE)
+	@CARGO_TARGET_DIR="$(USER_TARGET_DIR)" $(MAKE) -C ../user build \
+		TEST=$(TEST) CHAPTER=$(CHAPTER) BASE=$(BASE) \
+		TARGET_DIR="$(USER_TARGET_DIR)/$(TARGET)/$(MODE)"
 	@echo Platform: $(BOARD)
-	@cargo build $(MODE_ARG)
+	@cargo build $(MODE_ARG) --target-dir "$(KERNEL_TARGET_DIR)"
 
 clean:
-	@cargo clean
+	@cargo clean --target-dir "$(KERNEL_TARGET_DIR)"
 
 disasm: kernel
 	@$(OBJDUMP) $(DISASM) $(KERNEL_ELF) | less

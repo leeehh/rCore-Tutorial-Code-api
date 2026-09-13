@@ -46,6 +46,14 @@ $ make build_docker
 $ make docker
 ```
 
+Inside a container, the OS Makefile keeps Cargo build artifacts in a separate
+cache for this checkout under `/tmp/rcore-build-<uid>/`. This avoids concurrent
+artifact access through the host-shared source directory while retaining Cargo's
+default parallel compilation. Kernel and user artifacts use separate directories.
+Run `make run` as usual; `make clean` uses the same kernel cache. You can select a
+different container-local cache with `BUILD_CACHE=/path/to/cache`. Outside a
+container, the default locations remain `os/target` and `user/target`.
+
 If you experience network issues when accessing foreign resources such as GitHub in Docker, you can follow the following suggestions according to your stage:
 
 - Docker pull:
