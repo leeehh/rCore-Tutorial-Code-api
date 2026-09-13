@@ -8,6 +8,44 @@
 
 本文沿用 [rCore-Tutorial-v3 接口文档](https://github.com/rcore-os/rCore-Tutorial-v3-api-doc/blob/main/rCore-Tutorial-v3.md) 按模块和接口组织 `description` 与代码声明的形式。以下职责、输入、输出和关键约束以本仓库 `ch3-api` 代码为准。
 
+## os::task::task
+
+description: 该子模块定义任务控制块和任务状态，源码位于 [os/src/task/task.rs](os/src/task/task.rs)。这些数据结构已经提供，用来统一任务管理、上下文切换和系统调用统计所使用的任务表示。
+
+### TaskStatus
+
+description: `TaskStatus` 定义本章任务可能处于的四种状态。初始化与三个公共接口需要按照各自契约维护这些状态。
+
+```rust
+#[derive(Copy, Clone, PartialEq)]
+pub enum TaskStatus {
+    UnInit,
+    Ready,
+    Running,
+    Exited,
+}
+```
+
+| 状态 | 含义 |
+| --- | --- |
+| `UnInit` | 尚未初始化的任务槽位 |
+| `Ready` | 已具备执行条件，等待调度 |
+| `Running` | 当前正在执行的任务，包括该任务正在执行的内核处理过程 |
+| `Exited` | 已结束执行的任务，该状态为终态 |
+
+### TaskControlBlock
+
+description: `TaskControlBlock` 保存一个静态加载应用对应的任务信息。`task_status` 表示任务的生命周期状态，`task_cx` 保存任务在内核中启动或恢复所需的寄存器上下文，`syscall_counts` 保存该任务按系统调用编号索引的调用次数。任务编号由控制块所在的数组索引确定。
+
+```rust
+#[derive(Copy, Clone)]
+pub struct TaskControlBlock {
+    pub task_status: TaskStatus,
+    pub task_cx: TaskContext,
+    pub syscall_counts: [usize; MAX_SYSCALL_NUM],
+}
+```
+
 ## os::task
 
 description: `os::task` 管理静态加载应用的执行状态，并为内核启动、系统调用和异常处理提供任务调度能力。一个应用对应一个任务，任务编号就是它在任务控制块数组中的索引。模块通过全局任务管理器 `TASK_MANAGER` 维护实际应用数量、各任务的控制块以及当前任务编号。
@@ -21,16 +59,6 @@ description: `os::task` 管理静态加载应用的执行状态，并为内核�
 | `run_first_task()` | [rust_main](os/src/main.rs) | 应用加载及中断初始化完成后，启动首个应用 |
 | `suspend_current_and_run_next()` | [sys_yield](os/src/syscall/process.rs)、[时钟中断处理](os/src/trap/mod.rs) | 支持应用主动让出 CPU 和时钟中断引起的抢占 |
 | `exit_current_and_run_next()` | [sys_exit](os/src/syscall/process.rs)、[应用异常处理](os/src/trap/mod.rs) | 支持应用正常退出，以及访问异常、非法指令导致的任务终止 |
-
-### 模块共同约束
-
-这些约束适用于初始化和三个公共接口，也适用于学生自行设计的内部辅助函数。
-
-- **任务编号与调度范围**：有效任务编号位于 `0..num_app`，与加载的应用一一对应。调度选择遵循按任务编号排列的轮转顺序，从当前任务之后开始，并在有效编号范围内循环；可被选中的任务状态为 `Ready`。
-- **运行状态一致性**：任务运行期间，`current_task` 必须指向实际正在执行的任务，该任务的状态为 `Running`。等待再次执行的任务为 `Ready`，已经结束的任务为 `Exited`。
-- **上下文有效性**：任务的上下文必须对应自身的执行环境。上下文切换所使用的指针，其指向的存储在被使用期间必须持续有效；暂停任务需要保留恢复原执行流所需的信息。
-- **单核借用约束**：任务管理器使用 `UPSafeCell` 管理内部可变状态。上下文切换期间不得持有对该内部状态的动态借用，使随后运行的任务可以正常访问同一个管理器。
-- **系统调用统计一致性**：各任务独立持有 `syscall_counts`。计数在初始化时为零，在任务暂停、恢复和切换期间保持所属任务的累计值，并与已提供的统计接口兼容。
 
 ### TaskManager 与 TaskManagerInner
 
@@ -161,44 +189,6 @@ pub fn exit_current_and_run_next() {
 - 后继任务的选择遵循模块的轮转约定，实际执行任务与 `current_task`、`Running` 状态一致。
 - 其他有效任务的执行上下文和各自的系统调用累计计数保持可用。
 - 交接执行权时遵守模块共同约束中的上下文有效性和动态借用要求。
-
-## os::task::task
-
-description: 该子模块定义任务控制块和任务状态，源码位于 [os/src/task/task.rs](os/src/task/task.rs)。这些数据结构已经提供，用来统一任务管理、上下文切换和系统调用统计所使用的任务表示。
-
-### TaskControlBlock
-
-description: `TaskControlBlock` 保存一个静态加载应用对应的任务信息。`task_status` 表示任务的生命周期状态，`task_cx` 保存任务在内核中启动或恢复所需的寄存器上下文，`syscall_counts` 保存该任务按系统调用编号索引的调用次数。任务编号由控制块所在的数组索引确定。
-
-```rust
-#[derive(Copy, Clone)]
-pub struct TaskControlBlock {
-    pub task_status: TaskStatus,
-    pub task_cx: TaskContext,
-    pub syscall_counts: [usize; MAX_SYSCALL_NUM],
-}
-```
-
-### TaskStatus
-
-description: `TaskStatus` 定义本章任务可能处于的四种状态。初始化与三个公共接口需要按照各自契约维护这些状态。
-
-```rust
-#[derive(Copy, Clone, PartialEq)]
-pub enum TaskStatus {
-    UnInit,
-    Ready,
-    Running,
-    Exited,
-}
-```
-
-| 状态 | 含义 |
-| --- | --- |
-| `UnInit` | 尚未初始化的任务槽位 |
-| `Ready` | 已具备执行条件，等待调度 |
-| `Running` | 当前正在执行的任务，包括该任务正在执行的内核处理过程 |
-| `Exited` | 已结束执行的任务，该状态为终态 |
 
 ## 已提供的配套功能
 
