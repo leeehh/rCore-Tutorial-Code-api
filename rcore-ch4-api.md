@@ -4,7 +4,7 @@
 
 本实验基于 `ch4-api` 分支，要求同学借助 AI 完成第四章 `mm` 模块中的页表和地址空间管理。完成后的模块需要为内核和各应用建立符合权限要求的虚拟地址空间，支持用户地址访问、动态映射、解除映射和堆空间调整，并与已有任务管理和系统调用代码配合运行。
 
-实验提供数据结构和必要的接口签名。实现范围是 [os/src/mm/page_table.rs](os/src/mm/page_table.rs) 和 [os/src/mm/memory_set.rs](os/src/mm/memory_set.rs)，共十一处 TODO：十个固定签名的函数，以及 `KERNEL_SPACE` 的初始化表达式。`MapArea` 的八个方法完整提供。源码还给出五个函数签名作为内部实现提示，供学生选择和调整。
+实验提供数据结构和必要的接口签名。实现范围是 [os/src/mm/page_table.rs](os/src/mm/page_table.rs) 和 [os/src/mm/memory_set.rs](os/src/mm/memory_set.rs)，共十一处 TODO：十个固定签名的函数，以及 `KERNEL_SPACE` 的初始化表达式。源码还给出五个函数签名作为内部实现提示，供学生选择和调整。
 
 本文采用 [rCore-Tutorial-v3 接口文档](https://github.com/rcore-os/rCore-Tutorial-v3-api-doc/blob/main/rCore-Tutorial-v3.md) 按模块和接口组织 `description` 与代码声明的形式。具体输入、输出和关键约束以本仓库第四章代码为准。
 
@@ -441,7 +441,7 @@ pub fn append_to(&mut self, start: VirtAddr, new_end: VirtAddr) -> bool {
 
 `MemorySet::has_mapped_pages()` 和 `has_unmapped_pages()` 已被任务模块直接调用，虽然属于查询辅助方法，其签名和实现仍直接提供。它们与 `MemorySet::translate()` 均依赖待实现的 `PageTable::translate()`。
 
-启动汇编、陷阱汇编、上下文切换汇编及链接脚本均直接提供。学生的代码实现范围是上述两个 `mm` 源文件，其他源码保持原样。
+启动汇编、trap汇编、上下文切换汇编及链接脚本均直接提供。学生的代码实现范围是上述两个 `mm` 源文件，其他源码保持原样。
 
 ## 运行与验收
 
@@ -454,4 +454,4 @@ make run CHAPTER=4 BASE=2
 
 `CHAPTER=4` 显式指定第四章，适用于带有后缀的 `ch4-api` 分支名。`BASE=2` 使用已有第二至第四章的测试应用。验收以这些应用的运行结果和原有断言为准，包括地址空间权限检查、用户缓冲区访问、`mmap`、`munmap`、`sbrk` 和 `sys_trace`。
 
-未完成的骨架会在启动时触发 `KERNEL_SPACE` 的 TODO。能够编译并运行到该位置仅说明骨架可以构建；完成实验后的代码应继续通过已有 `remap_test()` 并运行现有应用。部分应用按原测试设计触发访问异常，以验证权限或解除映射的效果。
+未完成的骨架会在启动时触发 `KERNEL_SPACE` 的 TODO。能够编译并运行到该位置仅说明骨架可以构建；完成实验后的代码应继续通过已有 `remap_test()` 并运行现有应用。
