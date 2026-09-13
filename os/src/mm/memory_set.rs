@@ -8,7 +8,7 @@
 // Allow unused items, imports, and parameters in the exercise skeleton.
 #![allow(dead_code, unused_imports, unused_variables)]
 
-use super::{frame_alloc, FrameTracker};
+use super::{frame_alloc, translated_byte_buffer, FrameTracker};
 use super::{PTEFlags, PageTable, PageTableEntry};
 use super::{PhysAddr, PhysPageNum, VirtAddr, VirtPageNum};
 use super::{StepByOne, VPNRange};
@@ -83,31 +83,36 @@ impl MapArea {
     }
     /// Map one page with the area's mapping type and permissions.
     pub fn map_one(&mut self, page_table: &mut PageTable, vpn: VirtPageNum) -> Option<()> {
-        let ppn: PhysPageNum;
-        match self.map_type {
-            MapType::Identical => {
-                ppn = PhysPageNum(vpn.0);
-            }
-            MapType::Framed => {
-                let frame = frame_alloc()?;
-                ppn = frame.ppn;
-                self.data_frames.insert(vpn, frame);
-            }
-        }
+        let frame = match self.map_type {
+            MapType::Identical => None,
+            MapType::Framed => Some(frame_alloc()?),
+        };
+        let ppn = frame.as_ref().map_or(PhysPageNum(vpn.0), |frame| frame.ppn);
         let pte_flags = PTEFlags::from_bits(self.map_perm.bits).unwrap();
-        page_table.map(vpn, ppn, pte_flags)
+        // Keep the new frame local until mapping succeeds, so failure frees it.
+        page_table.map(vpn, ppn, pte_flags)?;
+        if let Some(frame) = frame {
+            self.data_frames.insert(vpn, frame);
+        }
+        Some(())
     }
     #[allow(unused)]
     pub fn unmap_one(&mut self, page_table: &mut PageTable, vpn: VirtPageNum) {
+        page_table.unmap(vpn);
         if self.map_type == MapType::Framed {
             self.data_frames.remove(&vpn);
         }
-        page_table.unmap(vpn);
     }
     /// Map all pages in this area.
     pub fn map(&mut self, page_table: &mut PageTable) -> Option<()> {
         for vpn in self.vpn_range {
-            self.map_one(page_table, vpn)?;
+            if self.map_one(page_table, vpn).is_none() {
+                // Roll back only the pages successfully mapped by this call.
+                for mapped in VPNRange::new(self.vpn_range.get_start(), vpn) {
+                    self.unmap_one(page_table, mapped);
+                }
+                return None;
+            }
         }
         Some(())
     }
@@ -127,8 +132,14 @@ impl MapArea {
     #[allow(unused)]
     /// Extend this area to the given end page.
     pub fn append_to(&mut self, page_table: &mut PageTable, new_end: VirtPageNum) -> Option<()> {
-        for vpn in VPNRange::new(self.vpn_range.get_end(), new_end) {
-            self.map_one(page_table, vpn)?;
+        let old_end = self.vpn_range.get_end();
+        for vpn in VPNRange::new(old_end, new_end) {
+            if self.map_one(page_table, vpn).is_none() {
+                for mapped in VPNRange::new(old_end, vpn) {
+                    self.unmap_one(page_table, mapped);
+                }
+                return None;
+            }
         }
         self.vpn_range = VPNRange::new(self.vpn_range.get_start(), new_end);
         Some(())
@@ -164,7 +175,7 @@ pub struct MemorySet {
 }
 
 lazy_static! {
-    /// Todo: Initialize the shared kernel address space.
+    /// Initialize the shared kernel address space.
     ///
     /// Inputs: The linker symbols above and the memory layout constants.
     /// Output: An `Arc<UPSafeCell<MemorySet>>` containing the kernel's Sv39
@@ -175,7 +186,8 @@ lazy_static! {
     /// Keep the trampoline outside `areas`. Task-specific kernel stacks are
     /// added by the task module.
     pub static ref KERNEL_SPACE: Arc<UPSafeCell<MemorySet>> = {
-        todo!("mm::KERNEL_SPACE")
+        // SAFETY: Kernel address-space management runs on a single core.
+        Arc::new(unsafe { UPSafeCell::new(MemorySet::new_kernel()) })
     };
 }
 
@@ -192,13 +204,61 @@ impl MemorySet {
         self.page_table.token()
     }
 
-    // Implementation hints:
-    //
-    // fn push(&mut self, mut map_area: MapArea, data: Option<&[u8]>) -> Option<()>;
-    // fn map_trampoline(&mut self);
-    // pub fn new_kernel() -> Self;
+    fn push(&mut self, mut map_area: MapArea) -> Option<()> {
+        map_area.map(&mut self.page_table)?;
+        self.areas.push(map_area);
+        Some(())
+    }
 
-    /// Todo: Add an area backed by newly allocated data frames.
+    fn map_trampoline(&mut self) {
+        self.page_table
+            .map(
+                VirtAddr::from(TRAMPOLINE).floor(),
+                PhysAddr::from(strampoline as usize).floor(),
+                PTEFlags::R | PTEFlags::X,
+            )
+            .expect("Cannot map trampoline");
+    }
+
+    fn new_kernel() -> Self {
+        let mut memory_set = Self::new_bare();
+        memory_set.map_trampoline();
+        for (start, end, permission) in [
+            (
+                stext as usize,
+                etext as usize,
+                MapPermission::R | MapPermission::X,
+            ),
+            (srodata as usize, erodata as usize, MapPermission::R),
+            (
+                sdata as usize,
+                edata as usize,
+                MapPermission::R | MapPermission::W,
+            ),
+            (
+                sbss_with_stack as usize,
+                ebss as usize,
+                MapPermission::R | MapPermission::W,
+            ),
+            (
+                ekernel as usize,
+                MEMORY_END,
+                MapPermission::R | MapPermission::W,
+            ),
+        ] {
+            memory_set
+                .push(MapArea::new(
+                    start.into(),
+                    end.into(),
+                    MapType::Identical,
+                    permission,
+                ))
+                .expect("Cannot map kernel memory");
+        }
+        memory_set
+    }
+
+    /// Add an area backed by newly allocated data frames.
     ///
     /// Inputs: `[start_va, end_va)` is a virtual address range with no existing
     /// mappings in its covered pages; `permission` specifies the area permissions.
@@ -213,10 +273,10 @@ impl MemorySet {
         end_va: VirtAddr,
         permission: MapPermission,
     ) -> Option<()> {
-        todo!("mm::MemorySet::insert_framed_area")
+        self.push(MapArea::new(start_va, end_va, MapType::Framed, permission))
     }
 
-    /// Todo: Build a user address space for an ELF application.
+    /// Build a user address space for an ELF application.
     ///
     /// Inputs: `elf_data` contains a valid application ELF image from the loader.
     /// Output: `(memory_set, user_stack_top, entry_point)` for the application.
@@ -229,7 +289,67 @@ impl MemorySet {
     /// Map `TRAMPOLINE` to `strampoline` with RX and no U, outside `areas`.
     /// Each application owns its data frames independently.
     pub fn from_elf(elf_data: &[u8]) -> (Self, usize, usize) {
-        todo!("mm::MemorySet::from_elf")
+        let elf = xmas_elf::ElfFile::new(elf_data).expect("Invalid application ELF");
+        let mut memory_set = Self::new_bare();
+        memory_set.map_trampoline();
+        let mut highest_end = VirtPageNum::from(0);
+        for segment in elf.program_iter() {
+            if segment.get_type().unwrap() != xmas_elf::program::Type::Load
+                || segment.mem_size() == 0
+            {
+                continue;
+            }
+            let start = segment.virtual_addr() as usize;
+            let end = start + segment.mem_size() as usize;
+            let start_va = VirtAddr::from(start);
+            let end_va = VirtAddr::from(end);
+            highest_end = highest_end.max(end_va.ceil());
+            let flags = segment.flags();
+            let mut permission = MapPermission::U;
+            if flags.is_read() {
+                permission |= MapPermission::R;
+            }
+            if flags.is_write() {
+                permission |= MapPermission::W;
+            }
+            if flags.is_execute() {
+                permission |= MapPermission::X;
+            }
+            memory_set
+                .insert_framed_area(start_va, end_va, permission)
+                .expect("Cannot map application segment");
+
+            // Copy at the segment's actual virtual address, including its page
+            // offset. Fresh frames leave the rest of the segment zero-filled.
+            let file_start = segment.offset() as usize;
+            let data = &elf_data[file_start..file_start + segment.file_size() as usize];
+            let mut copied = 0;
+            for buffer in translated_byte_buffer(memory_set.token(), start as *const u8, data.len())
+            {
+                let next = copied + buffer.len();
+                buffer.copy_from_slice(&data[copied..next]);
+                copied = next;
+            }
+        }
+
+        // The highest segment need not be the last program header in the ELF.
+        let stack_bottom = usize::from(VirtAddr::from(highest_end)) + PAGE_SIZE;
+        let stack_top = stack_bottom + USER_STACK_SIZE;
+        let user_rw = MapPermission::R | MapPermission::W | MapPermission::U;
+        memory_set
+            .insert_framed_area(stack_bottom.into(), stack_top.into(), user_rw)
+            .expect("Cannot map user stack");
+        memory_set
+            .insert_framed_area(stack_top.into(), stack_top.into(), user_rw)
+            .expect("Cannot create user heap");
+        memory_set
+            .insert_framed_area(
+                TRAP_CONTEXT_BASE.into(),
+                TRAMPOLINE.into(),
+                MapPermission::R | MapPermission::W,
+            )
+            .expect("Cannot map trap context");
+        (memory_set, stack_top, elf.header.pt2.entry_point() as usize)
     }
 
     /// Change page table by writing satp CSR Register.
@@ -263,7 +383,7 @@ impl MemorySet {
         })
     }
 
-    /// Todo: Remove a complete framed area.
+    /// Remove a complete framed area.
     ///
     /// Inputs: `start` and `end` are the virtual page bounds of the area.
     /// Output: `Some(())` when the matching area is removed, or `None` when
@@ -272,10 +392,17 @@ impl MemorySet {
     /// metadata are removed, and its owned data frames are released.
     /// Other areas retain their mappings and contents.
     pub fn remove_framed_area(&mut self, start: VirtPageNum, end: VirtPageNum) -> Option<()> {
-        todo!("mm::MemorySet::remove_framed_area")
+        let index = self.areas.iter().position(|area| {
+            area.map_type == MapType::Framed
+                && area.vpn_range.get_start() == start
+                && area.vpn_range.get_end() == end
+        })?;
+        let mut area = self.areas.remove(index);
+        area.unmap(&mut self.page_table);
+        Some(())
     }
 
-    /// Todo: Shrink an existing area to a new end address.
+    /// Shrink an existing area to a new end address.
     ///
     /// Inputs: `start` identifies the area's first page; `new_end` is the
     /// requested end address within the area's current address range.
@@ -285,10 +412,19 @@ impl MemorySet {
     /// are unmapped and their owned data frames are released.
     #[allow(unused)]
     pub fn shrink_to(&mut self, start: VirtAddr, new_end: VirtAddr) -> bool {
-        todo!("mm::MemorySet::shrink_to")
+        if let Some(area) = self
+            .areas
+            .iter_mut()
+            .find(|area| area.vpn_range.get_start() == start.floor())
+        {
+            area.shrink_to(&mut self.page_table, new_end.ceil());
+            true
+        } else {
+            false
+        }
     }
 
-    /// Todo: Extend an existing area to a new end address.
+    /// Extend an existing area to a new end address.
     ///
     /// Inputs: `start` identifies the area's first page; `new_end` is at or
     /// beyond its current end, with no conflicting mappings in the added range.
@@ -299,7 +435,16 @@ impl MemorySet {
     /// zeros and have the same permissions as the area.
     #[allow(unused)]
     pub fn append_to(&mut self, start: VirtAddr, new_end: VirtAddr) -> bool {
-        todo!("mm::MemorySet::append_to")
+        if let Some(area) = self
+            .areas
+            .iter_mut()
+            .find(|area| area.vpn_range.get_start() == start.floor())
+        {
+            area.append_to(&mut self.page_table, new_end.ceil())
+                .is_some()
+        } else {
+            false
+        }
     }
 }
 
