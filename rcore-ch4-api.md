@@ -4,7 +4,7 @@
 
 本实验基于 `ch4-api` 分支，要求同学借助 AI 完成第四章 `mm` 模块中的页表和地址空间管理。完成后的模块需要为内核和各应用建立符合权限要求的虚拟地址空间，支持用户地址访问、动态映射、解除映射和堆空间调整，并与已有任务管理和系统调用代码配合运行。
 
-实验提供数据结构和必要的接口签名。实现范围是 [os/src/mm/page_table.rs](os/src/mm/page_table.rs) 和 [os/src/mm/memory_set.rs](os/src/mm/memory_set.rs)，共九处 TODO：八个固定签名的函数，以及 `KERNEL_SPACE` 的初始化表达式。源码还给出十五个函数签名作为内部实现提示，供学生选择和调整。
+实验提供数据结构和必要的接口签名。实现范围是 [os/src/mm/page_table.rs](os/src/mm/page_table.rs) 和 [os/src/mm/memory_set.rs](os/src/mm/memory_set.rs)，共十一处 TODO：十个固定签名的函数，以及 `KERNEL_SPACE` 的初始化表达式。`MapArea` 的八个方法完整提供。源码还给出五个函数签名作为内部实现提示，供学生选择和调整。
 
 本文采用 [rCore-Tutorial-v3 接口文档](https://github.com/rcore-os/rCore-Tutorial-v3-api-doc/blob/main/rCore-Tutorial-v3.md) 按模块和接口组织 `description` 与代码声明的形式。具体输入、输出和关键约束以本仓库第四章代码为准。
 
@@ -100,7 +100,7 @@ pub struct MapArea {
 }
 ```
 
-逻辑段的范围、权限、数据页帧归属与实际页表映射需要保持一致。`MapArea` 的方法没有固定实现要求，源码注释中的候选签名仅供参考。
+逻辑段的范围、权限、数据页帧归属与实际页表映射需要保持一致。`MapArea` 的 `new()`、`map_one()`、`unmap_one()`、`map()`、`unmap()`、`shrink_to()`、`append_to()` 和 `copy_data()` 均已完整提供，可供地址空间管理直接使用。它们依赖 `PageTable::map()`、`unmap()` 和 `translate()` 提供页表操作。
 
 ### MemorySet
 
@@ -117,7 +117,54 @@ pub struct MemorySet {
 
 ## os::mm::page_table
 
-description: 该子模块提供页表表示和地址查询，并将用户虚拟缓冲区转换为内核可以访问的物理内存切片。需要完成三个接口。`translate_user()` 和 `translated_byte_buffer()` 有 `mm` 外部调用方；`PageTable::translate()` 虽然没有外部直接调用方，但已提供的 `MemorySet` 查询方法和原有 `remap_test()` 依赖其签名，因此也属于固定接口。
+description: 该子模块提供页表映射、解除映射和地址查询，并将用户虚拟缓冲区转换为内核可以访问的物理内存切片。需要完成五个接口。`translate_user()` 和 `translated_byte_buffer()` 有 `mm` 外部调用方；`PageTable::map()`、`unmap()` 和 `translate()` 供已提供的 `MapArea`、`MemorySet` 查询方法及 `remap_test()` 使用，也属于固定接口。
+
+### PageTable::map
+
+description: 将一个虚拟页映射到指定物理页，并赋予相应的访问权限。已提供的 `MapArea::map_one()` 使用该接口建立恒等映射或 Framed 映射，将数据页帧管理与页表操作连接起来。
+
+```rust
+pub fn map(&mut self, vpn: VirtPageNum, ppn: PhysPageNum, flags: PTEFlags) -> Option<()> {
+    todo!("mm::PageTable::map")
+}
+```
+
+**输入**
+
+`vpn` 是目标虚拟页号，`ppn` 是对应物理页号，`flags` 指定页表项的访问权限。`self` 是需要建立映射的页表，物理数据页由调用方提供。
+
+**输出**
+
+成功建立映射时返回 `Some(())`；虚拟页已有有效映射，或所需页表页帧无法分配时返回 `None`。
+
+**关键约束**
+
+- 建立 4 KiB 的 Sv39 页映射，页表项具有 `V` 和传入的权限标志。
+- 中间页表页帧由该 `PageTable` 的 `frames` 持有。
+- 数据页帧的所有权由调用方管理，与页表页帧的所有权分开。
+
+### PageTable::unmap
+
+description: 解除指定虚拟页的有效映射，供已提供的 `MapArea::unmap_one()` 使用。逻辑段的数据页帧由 `MapArea` 管理，本接口负责页表中的映射状态。
+
+```rust
+pub fn unmap(&mut self, vpn: VirtPageNum) {
+    todo!("mm::PageTable::unmap")
+}
+```
+
+**输入**
+
+`vpn` 是当前具有有效映射的虚拟页号，`self` 是该映射所在的页表。
+
+**输出**
+
+返回 `()`，目标虚拟页不再具有有效映射。
+
+**关键约束**
+
+- 其他虚拟页的映射保持有效。
+- 数据页帧的分配与回收由调用方负责。
 
 ### PageTable::translate
 
@@ -141,7 +188,7 @@ pub fn translate(&self, vpn: VirtPageNum) -> Option<PageTableEntry> {
 
 - 遵守本章 Sv39 页表布局和 4 KiB 页映射约定。
 - 返回存储的页表项内容，保留其物理页号与标志。
-- 与已提供的 `MemorySet::translate()`、`has_mapped_pages()`、`has_unmapped_pages()` 和 `remap_test()` 的调用约定兼容。
+- 与已提供的 `MapArea::copy_data()`、`MemorySet::translate()`、`has_mapped_pages()`、`has_unmapped_pages()` 和 `remap_test()` 的调用约定兼容。
 
 ### PageTable::translate_user
 
@@ -374,11 +421,10 @@ pub fn append_to(&mut self, start: VirtAddr, new_end: VirtAddr) -> bool {
 
 | 所属类型 | 注释中的候选接口 | 数量 |
 | --- | --- | --- |
-| `PageTable` | `find_pte_create`、`find_pte`、`map`、`unmap` | 4 |
+| `PageTable` | `find_pte_create`、`find_pte` | 2 |
 | `MemorySet` | `push`、`map_trampoline`、`new_kernel` | 3 |
-| `MapArea` | `new`、`map_one`、`unmap_one`、`map`、`unmap`、`shrink_to`、`append_to`、`copy_data` | 8 |
 
-学生仍需要完成建立和解除映射、管理逻辑段及装载数据等功能，但不必采用这些辅助函数的划分。固定要求是九处 TODO 的约定，以及保留的数据结构与配套代码之间的一致性。
+学生需要完成固定接口约定的页表操作和地址空间管理，可以直接使用已提供的 `MapArea` 方法。内部辅助函数不必采用上述划分，固定要求是十一处 TODO 的约定，以及数据结构与配套代码之间的一致性。
 
 ## 已提供的配套功能
 
@@ -389,7 +435,7 @@ pub fn append_to(&mut self, start: VirtAddr, new_end: VirtAddr) -> bool {
 | [mm/heap_allocator.rs](os/src/mm/heap_allocator.rs) | 内核堆分配器 |
 | [mm/mod.rs](os/src/mm/mod.rs) | 模块导出和内存管理初始化 |
 | [mm/page_table.rs](os/src/mm/page_table.rs) | 页表项操作、`PageTable::new()`、`from_token()`、`token()` |
-| [mm/memory_set.rs](os/src/mm/memory_set.rs) | `MemorySet::new_bare()`、`token()`、`activate()`、`translate()`、两个映射范围查询、内核栈位置计算和 `remap_test()` |
+| [mm/memory_set.rs](os/src/mm/memory_set.rs) | `MapArea` 的全部八个方法，`MemorySet::new_bare()`、`token()`、`activate()`、`translate()`、两个映射范围查询、内核栈位置计算和 `remap_test()` |
 | [task](os/src/task)、[syscall](os/src/syscall) | 完整任务管理和系统调用，包括 `sys_get_time`、`sys_trace`、`mmap`、`munmap`、`sbrk` 及系统调用计数 |
 | [trap](os/src/trap)、[timer.rs](os/src/timer.rs) | 陷阱处理和时钟支持 |
 

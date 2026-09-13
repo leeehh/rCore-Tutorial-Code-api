@@ -106,8 +106,30 @@ impl PageTable {
     //
     // fn find_pte_create(&mut self, vpn: VirtPageNum) -> Option<&mut PageTableEntry>;
     // fn find_pte(&self, vpn: VirtPageNum) -> Option<&mut PageTableEntry>;
-    // pub fn map(&mut self, vpn: VirtPageNum, ppn: PhysPageNum, flags: PTEFlags) -> Option<()>;
-    // pub fn unmap(&mut self, vpn: VirtPageNum);
+
+    /// Todo: Map a virtual page to the specified physical page.
+    ///
+    /// Inputs: `vpn` is the virtual page, `ppn` is its physical backing page,
+    /// and `flags` specifies the page table entry's access permissions.
+    /// Output: `Some(())` when the mapping is established, or `None` if the
+    /// virtual page is already mapped or a required page table frame cannot
+    /// be allocated.
+    /// Constraints: Use a 4 KiB Sv39 mapping with `V` and the requested flags.
+    /// This page table owns its intermediate page table frames through `frames`;
+    /// ownership of the mapped data frame remains with the caller.
+    pub fn map(&mut self, vpn: VirtPageNum, ppn: PhysPageNum, flags: PTEFlags) -> Option<()> {
+        todo!("mm::PageTable::map")
+    }
+
+    /// Todo: Remove the mapping for a virtual page.
+    ///
+    /// Inputs: `vpn` identifies a currently mapped virtual page.
+    /// Output: `()`; the specified virtual page no longer has a valid mapping.
+    /// Constraints: Other mappings remain valid. Data-frame allocation and
+    /// reclamation belong to the caller.
+    pub fn unmap(&mut self, vpn: VirtPageNum) {
+        todo!("mm::PageTable::unmap")
+    }
 
     /// Todo: Look up the final-level page table entry for a virtual page.
     ///
