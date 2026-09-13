@@ -12,6 +12,7 @@
 //! - switch::__switch 提供任务上下文切换，实现在 switch.S 中。
 //!
 //! 跨越上下文切换时，不得持有任务管理器内部数据的动态借用。
+//! record_current_syscall 和 current_syscall_count 已完整提供，供 sys_trace 使用。
 
 // TODO 骨架保留了供实现使用的接口、导入和参数，允许它们暂时未被使用。
 #![allow(dead_code, unused_imports, unused_variables)]
@@ -21,7 +22,7 @@ mod switch;
 #[allow(clippy::module_inception)]
 mod task;
 
-use crate::config::MAX_APP_NUM;
+use crate::config::{MAX_APP_NUM, MAX_SYSCALL_NUM};
 use crate::loader::{get_num_app, init_app_cx};
 use crate::sync::UPSafeCell;
 use lazy_static::lazy_static;
@@ -59,7 +60,7 @@ impl TaskManager {
     /// 输入：无显式参数；应用已加载，数量与初始上下文由 loader 提供。
     /// 输出：有效任务均为 Ready 并具有首次运行上下文的管理器，current_task 为 0。
     /// 关键约束：应用数量处于 1..=MAX_APP_NUM；有效任务与加载的应用一一对应，
-    /// 其余任务槽位为 UnInit。
+    /// 其余任务槽位为 UnInit；每个任务的 syscall_counts 初值均为 0。
     fn new() -> Self {
         todo!("task::TaskManager::new")
     }
@@ -111,6 +112,34 @@ impl TaskManager {
     fn run_next_task(&self) {
         todo!("task::TaskManager::run_next_task")
     }
+}
+
+/// 已提供：记录当前任务的一次系统调用。
+///
+/// 输入：syscall_id 为系统调用编号，计数归属于 TASK_MANAGER 的当前任务。
+/// 输出：返回 ()，统计范围内的相应计数增加一次。
+/// 关键约束：统计范围为 0..MAX_SYSCALL_NUM；系统调用分发入口负责记录，
+/// 包含本次 sys_trace 调用，返回时释放任务管理器的借用。
+pub fn record_current_syscall(syscall_id: usize) {
+    let mut inner = TASK_MANAGER.inner.exclusive_access();
+    let current = inner.current_task;
+    if let Some(count) = inner.tasks[current].syscall_counts.get_mut(syscall_id) {
+        *count += 1;
+    }
+}
+
+/// 已提供：查询当前任务的系统调用次数。
+///
+/// 输入：syscall_id 为待查询的系统调用编号。
+/// 输出：对应调用的累计次数；未记录的编号返回 0。
+/// 关键约束：查询只使用 TASK_MANAGER 当前任务的统计，计数由分发入口维护。
+pub fn current_syscall_count(syscall_id: usize) -> usize {
+    let inner = TASK_MANAGER.inner.exclusive_access();
+    inner.tasks[inner.current_task]
+        .syscall_counts
+        .get(syscall_id)
+        .copied()
+        .unwrap_or(0)
 }
 
 /// 内核启动代码使用的首个任务入口。

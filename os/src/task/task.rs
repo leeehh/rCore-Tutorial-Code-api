@@ -1,6 +1,7 @@
 //! 第三章任务控制块及任务状态定义。
 
 use super::TaskContext;
+use crate::config::MAX_SYSCALL_NUM;
 
 /// 静态加载应用对应的任务控制块。
 ///
@@ -11,6 +12,8 @@ pub struct TaskControlBlock {
     pub task_status: TaskStatus,
     /// 任务在内核中暂停或恢复执行所需的寄存器上下文。
     pub task_cx: TaskContext,
+    /// 已提供的 sys_trace 使用的系统调用计数；每个任务独立持有，初值均为 0。
+    pub syscall_counts: [usize; MAX_SYSCALL_NUM],
 }
 
 /// 任务的生命周期状态。
