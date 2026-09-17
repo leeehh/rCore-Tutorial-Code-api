@@ -5,8 +5,7 @@
 //! New processes start with stride 0 and priority 16. Internal helpers may be
 //! designed freely while preserving the supplied data structures and interfaces.
 
-// Allow unused items, imports, and parameters in the exercise skeleton.
-#![allow(dead_code, unused_imports, unused_variables)]
+#![allow(dead_code)]
 
 use super::TaskContext;
 use super::{kstack_alloc, pid_alloc, KernelStack, PidHandle};
@@ -103,7 +102,7 @@ impl TaskControlBlockInner {
 }
 
 impl TaskControlBlock {
-    /// Todo: Create a process with an independent address space from ELF.
+    /// Create a process with an independent address space from ELF.
     ///
     /// Inputs: `elf_data` is a valid application ELF image from the loader.
     /// Output: A `Ready` process with its own PID, kernel stack, user memory,
@@ -113,10 +112,45 @@ impl TaskControlBlock {
     /// user stack top. Start with no parent or children, exit code 0, stride 0,
     /// and priority 16. Do not enqueue the process.
     pub fn new(elf_data: &[u8]) -> Self {
-        todo!("task::TaskControlBlock::new")
+        let (memory_set, user_sp, entry_point) = MemorySet::from_elf(elf_data);
+        let trap_cx_ppn = memory_set
+            .translate(VirtAddr::from(TRAP_CONTEXT_BASE).into())
+            .unwrap()
+            .ppn();
+        let pid = pid_alloc();
+        let kernel_stack = kstack_alloc();
+        let kernel_stack_top = kernel_stack.get_top();
+        let task = Self {
+            pid,
+            kernel_stack,
+            inner: unsafe {
+                UPSafeCell::new(TaskControlBlockInner {
+                    trap_cx_ppn,
+                    base_size: user_sp,
+                    task_cx: TaskContext::goto_trap_return(kernel_stack_top),
+                    task_status: TaskStatus::Ready,
+                    stride: 0,
+                    prio: 16,
+                    memory_set,
+                    parent: None,
+                    children: Vec::new(),
+                    exit_code: 0,
+                    heap_bottom: user_sp,
+                    program_brk: user_sp,
+                })
+            },
+        };
+        *task.inner_exclusive_access().get_trap_cx() = TrapContext::app_init_context(
+            entry_point,
+            user_sp,
+            KERNEL_SPACE.exclusive_access().token(),
+            kernel_stack_top,
+            trap_handler as usize,
+        );
+        task
     }
 
-    /// Todo: Create a child that starts executing the supplied ELF.
+    /// Create a child that starts executing the supplied ELF.
     ///
     /// Inputs: `self` is the parent; `elf_data` is a valid application ELF image.
     /// Output: An `Arc` to a new `Ready` child, also owned by the parent's
@@ -124,10 +158,15 @@ impl TaskControlBlock {
     /// Constraints: Reuse `new` for the child's complete execution environment
     /// and default scheduling attributes. The caller enqueues the child.
     pub fn spawn(self: &Arc<Self>, elf_data: &[u8]) -> Arc<Self> {
-        todo!("task::TaskControlBlock::spawn")
+        let child = Arc::new(Self::new(elf_data));
+        child.inner_exclusive_access().parent = Some(Arc::downgrade(self));
+        self.inner_exclusive_access()
+            .children
+            .push(Arc::clone(&child));
+        child
     }
 
-    /// Todo: Replace the current process's application with a new ELF image.
+    /// Replace the current process's application with a new ELF image.
     ///
     /// Inputs: `self` is the running process; `elf_data` is a valid ELF image.
     /// Output: `()`; the next trap return enters the new application.
@@ -137,10 +176,27 @@ impl TaskControlBlock {
     /// task context, status, family relationships, exit code, stride, and priority.
     /// Release the old user address space without creating or enqueueing a task.
     pub fn exec(&self, elf_data: &[u8]) {
-        todo!("task::TaskControlBlock::exec")
+        let (memory_set, user_sp, entry_point) = MemorySet::from_elf(elf_data);
+        let trap_cx_ppn = memory_set
+            .translate(VirtAddr::from(TRAP_CONTEXT_BASE).into())
+            .unwrap()
+            .ppn();
+        let mut inner = self.inner_exclusive_access();
+        inner.memory_set = memory_set;
+        inner.trap_cx_ppn = trap_cx_ppn;
+        inner.base_size = user_sp;
+        inner.heap_bottom = user_sp;
+        inner.program_brk = user_sp;
+        *inner.get_trap_cx() = TrapContext::app_init_context(
+            entry_point,
+            user_sp,
+            KERNEL_SPACE.exclusive_access().token(),
+            self.kernel_stack.get_top(),
+            trap_handler as usize,
+        );
     }
 
-    /// Todo: Create a child with a copy of the parent's user execution state.
+    /// Create a child with a copy of the parent's user execution state.
     ///
     /// Inputs: `self` is the running parent process.
     /// Output: An `Arc` to a new `Ready` child with its own PID, kernel stack,
@@ -151,10 +207,42 @@ impl TaskControlBlock {
     /// `trap_return`; its trap context uses the child's kernel stack. Preserve
     /// the parent's execution state. `sys_fork` sets child a0 to 0 and enqueues it.
     pub fn fork(self: &Arc<Self>) -> Arc<Self> {
-        todo!("task::TaskControlBlock::fork")
+        let mut parent_inner = self.inner_exclusive_access();
+        let memory_set = MemorySet::from_existed_user(&parent_inner.memory_set);
+        let trap_cx_ppn = memory_set
+            .translate(VirtAddr::from(TRAP_CONTEXT_BASE).into())
+            .unwrap()
+            .ppn();
+        let pid = pid_alloc();
+        let kernel_stack = kstack_alloc();
+        let kernel_stack_top = kernel_stack.get_top();
+        let child = Arc::new(Self {
+            pid,
+            kernel_stack,
+            inner: unsafe {
+                UPSafeCell::new(TaskControlBlockInner {
+                    trap_cx_ppn,
+                    base_size: parent_inner.base_size,
+                    task_cx: TaskContext::goto_trap_return(kernel_stack_top),
+                    task_status: TaskStatus::Ready,
+                    stride: 0,
+                    prio: 16,
+                    memory_set,
+                    parent: Some(Arc::downgrade(self)),
+                    children: Vec::new(),
+                    exit_code: 0,
+                    heap_bottom: parent_inner.heap_bottom,
+                    program_brk: parent_inner.program_brk,
+                })
+            },
+        });
+        // The copied user context must return through the child's kernel stack.
+        child.inner_exclusive_access().get_trap_cx().kernel_sp = kernel_stack_top;
+        parent_inner.children.push(Arc::clone(&child));
+        child
     }
 
-    /// Todo: Query and reap one matching zombie child without blocking.
+    /// Query and reap one matching zombie child without blocking.
     ///
     /// Inputs: `pid == -1` matches any child; otherwise match the child's PID.
     /// Output: `Ok((pid, exit_code))` after reaping a zombie, `Err(-1)` if no
@@ -165,17 +253,36 @@ impl TaskControlBlock {
     /// errors leave the family unchanged. Do not schedule or access user pointers;
     /// the supplied syscall writes the exit code back to user space.
     pub fn waitpid(&self, pid: isize) -> Result<(usize, i32), isize> {
-        todo!("task::TaskControlBlock::waitpid")
+        let mut inner = self.inner_exclusive_access();
+        let matches_pid = |child: &Arc<Self>| pid == -1 || child.getpid() as isize == pid;
+        if !inner.children.iter().any(matches_pid) {
+            return Err(-1);
+        }
+        let zombie_index = inner
+            .children
+            .iter()
+            .position(|child| matches_pid(child) && child.inner_exclusive_access().is_zombie());
+        if let Some(index) = zombie_index {
+            let child = inner.children.remove(index);
+            let exit_code = child.inner_exclusive_access().exit_code;
+            Ok((child.getpid(), exit_code))
+        } else {
+            Err(-2)
+        }
     }
 
-    /// Todo: Update this process's scheduling priority.
+    /// Update this process's scheduling priority.
     ///
     /// Inputs: `prio` is the requested priority as a signed integer.
     /// Output: Return `prio` on success, or -1 when `prio < 2`.
     /// Constraints: Accept every `prio >= 2`, storing it as `usize`; an invalid
     /// request leaves the old priority unchanged. Do not reset stride or yield.
     pub fn set_priority(&self, prio: isize) -> isize {
-        todo!("task::TaskControlBlock::set_priority")
+        if prio < 2 {
+            return -1;
+        }
+        self.inner_exclusive_access().prio = prio as usize;
+        prio
     }
 
     /// get pid of process

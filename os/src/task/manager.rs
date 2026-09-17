@@ -3,8 +3,7 @@
 //! Only `Ready` processes belong in this queue. Queue insertion is supplied;
 //! selection and stride accounting are the exercise interface.
 
-// Allow unused items, imports, and parameters in the exercise skeleton.
-#![allow(dead_code, unused_imports, unused_variables)]
+#![allow(dead_code)]
 
 use super::TaskControlBlock;
 use crate::config::BIG_STRIDE;
@@ -29,7 +28,7 @@ impl TaskManager {
     pub fn add(&mut self, task: Arc<TaskControlBlock>) {
         self.ready_queue.push_back(task);
     }
-    /// Todo: Select and remove the ready process with the smallest stride.
+    /// Select and remove the ready process with the smallest stride.
     ///
     /// Inputs: The ready queue; all queued processes have priority at least 2.
     /// Output: `Some(task)` for the selected process, or `None` for an empty queue.
@@ -39,7 +38,20 @@ impl TaskManager {
     /// of the remaining processes. Leave the selected process `Ready`;
     /// `run_tasks` owns the transition to `Running` and the context switch.
     pub fn fetch(&mut self) -> Option<Arc<TaskControlBlock>> {
-        todo!("task::TaskManager::fetch")
+        // min_by_key keeps the first minimum, so ties follow queue order.
+        let index = self
+            .ready_queue
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, task)| task.inner_exclusive_access().stride)
+            .map(|(index, _)| index)?;
+        let task = self.ready_queue.remove(index).unwrap();
+        {
+            let mut inner = task.inner_exclusive_access();
+            let pass = BIG_STRIDE / inner.prio;
+            inner.stride += pass;
+        }
+        Some(task)
     }
 }
 

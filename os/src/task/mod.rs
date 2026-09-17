@@ -12,8 +12,7 @@
 //!
 //! Internal helper functions may be designed freely within the fixed interfaces.
 
-// Allow unused items, imports, and parameters in the exercise skeleton.
-#![allow(dead_code, unused_imports, unused_variables)]
+#![allow(dead_code)]
 
 mod context;
 mod id;
@@ -37,7 +36,7 @@ pub use processor::{
     current_task, current_trap_cx, current_user_token, run_tasks, schedule, take_current_task,
     Processor,
 };
-/// Todo: Suspend the running process and return control to the scheduler.
+/// Suspend the running process and return control to the scheduler.
 ///
 /// Inputs: The processor owns the current `Running` process.
 /// Output: The process is `Ready` and queued once, with a resumable task context;
@@ -46,13 +45,20 @@ pub use processor::{
 /// current slot before scheduling and release all dynamic borrows. Preserve
 /// the process's resources and scheduling attributes; stride is charged by fetch.
 pub fn suspend_current_and_run_next() {
-    todo!("task::suspend_current_and_run_next")
+    let task = take_current_task().unwrap();
+    let mut inner = task.inner_exclusive_access();
+    inner.task_status = TaskStatus::Ready;
+    let task_cx_ptr = &mut inner.task_cx as *mut TaskContext;
+    drop(inner);
+    // The queue keeps the context alive until the processor takes ownership.
+    add_task(task);
+    schedule(task_cx_ptr);
 }
 
 /// PID of initproc; this user process is distinct from the processor's idle context.
 pub const IDLE_PID: usize = 0;
 
-/// Todo: Terminate the running process and return control to the scheduler.
+/// Terminate the running process and return control to the scheduler.
 ///
 /// Inputs: `exit_code` is supplied by sys_exit or application trap handling.
 /// Output: A non-init process becomes `Zombie` with the recorded exit code;
@@ -63,7 +69,31 @@ pub const IDLE_PID: usize = 0;
 /// and temporary owning references before switching; never enqueue a zombie.
 /// Exiting PID 0 terminates the kernel with the existing panic policy.
 pub fn exit_current_and_run_next(exit_code: i32) {
-    todo!("task::exit_current_and_run_next")
+    let task = take_current_task().unwrap();
+    if task.getpid() == IDLE_PID {
+        println!(
+            "[kernel] Idle process exit with exit_code {} ...",
+            exit_code
+        );
+        panic!("All applications completed!");
+    }
+    let mut inner = task.inner_exclusive_access();
+    inner.task_status = TaskStatus::Zombie;
+    inner.exit_code = exit_code;
+    {
+        let mut init_inner = INITPROC.inner_exclusive_access();
+        for child in inner.children.drain(..) {
+            child.inner_exclusive_access().parent = Some(Arc::downgrade(&INITPROC));
+            init_inner.children.push(child);
+        }
+    }
+    inner.memory_set.recycle_data_pages();
+    drop(inner);
+    // This stack is abandoned: release our Arc before switching to idle.
+    drop(task);
+    let mut unused_task_cx = TaskContext::zero_init();
+    schedule(&mut unused_task_cx as *mut TaskContext);
+    panic!("An exited process must not be resumed!");
 }
 
 lazy_static! {
