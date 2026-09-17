@@ -1,18 +1,20 @@
-//! Task management implementation
+//! Process lifecycle and scheduling exercise for chapter 5.
 //!
-//! Everything about task management, like starting and switching tasks is
-//! implemented here.
+//! The supplied task control blocks, ready queue, and processor state share one
+//! representation of each process. Constructors leave tasks ready but not queued;
+//! callers enqueue them. A running task is owned by the processor and is absent
+//! from the ready queue. Zombies never run again and await parental reaping.
 //!
-//! A single global instance of [`TaskManager`] called `TASK_MANAGER` controls
-//! all the tasks in the whole operating system.
+//! Scheduling passes through the processor's idle context on this single core.
+//! Release all dynamic borrows before switching; context pointers must remain
+//! valid during use. Do not retain temporary owning references on an exited
+//! process's abandoned stack, since they would prevent its final reclamation.
 //!
-//! A single global instance of [`Processor`] called `PROCESSOR` monitors running
-//! task(s) for each core.
-//!
-//! A single global instance of `PID_ALLOCATOR` allocates pid for user apps.
-//!
-//! Be careful when you see `__switch` ASM function in `switch.S`. Control flow around this function
-//! might not be what you expect.
+//! Internal helper functions may be designed freely within the fixed interfaces.
+
+// Allow unused items, imports, and parameters in the exercise skeleton.
+#![allow(dead_code, unused_imports, unused_variables)]
+
 mod context;
 mod id;
 mod manager;
@@ -35,70 +37,33 @@ pub use processor::{
     current_task, current_trap_cx, current_user_token, run_tasks, schedule, take_current_task,
     Processor,
 };
-/// Suspend the current 'Running' task and run the next task in task list.
+/// Todo: Suspend the running process and return control to the scheduler.
+///
+/// Inputs: The processor owns the current `Running` process.
+/// Output: The process is `Ready` and queued once, with a resumable task context;
+/// this call returns `()` when the process is dispatched again.
+/// Constraints: Support both yield and timer preemption. Clear the processor's
+/// current slot before scheduling and release all dynamic borrows. Preserve
+/// the process's resources and scheduling attributes; stride is charged by fetch.
 pub fn suspend_current_and_run_next() {
-    // There must be an application running.
-    let task = take_current_task().unwrap();
-
-    // ---- access current TCB exclusively
-    let mut task_inner = task.inner_exclusive_access();
-    let task_cx_ptr = &mut task_inner.task_cx as *mut TaskContext;
-    // Change status to Ready
-    task_inner.task_status = TaskStatus::Ready;
-    drop(task_inner);
-    // ---- release current PCB
-
-    // push back to ready queue.
-    add_task(task);
-    // jump to scheduling cycle
-    schedule(task_cx_ptr);
+    todo!("task::suspend_current_and_run_next")
 }
 
-/// pid of usertests app in make run TEST=1
+/// PID of initproc; this user process is distinct from the processor's idle context.
 pub const IDLE_PID: usize = 0;
 
-/// Exit the current 'Running' task and run the next task in task list.
+/// Todo: Terminate the running process and return control to the scheduler.
+///
+/// Inputs: `exit_code` is supplied by sys_exit or application trap handling.
+/// Output: A non-init process becomes `Zombie` with the recorded exit code;
+/// the scheduler resumes and the exiting process never returns to its caller.
+/// Constraints: Clear `current`, transfer all children to INITPROC with updated
+/// parent links, and recycle the exiting process's user data pages. Its parent
+/// retains it until waitpid reaps the TCB, PID, and kernel stack. Release borrows
+/// and temporary owning references before switching; never enqueue a zombie.
+/// Exiting PID 0 terminates the kernel with the existing panic policy.
 pub fn exit_current_and_run_next(exit_code: i32) {
-    // take from Processor
-    let task = take_current_task().unwrap();
-
-    let pid = task.getpid();
-    if pid == IDLE_PID {
-        println!(
-            "[kernel] Idle process exit with exit_code {} ...",
-            exit_code
-        );
-        panic!("All applications completed!");
-    }
-
-    // **** access current TCB exclusively
-    let mut inner = task.inner_exclusive_access();
-    // Change status to Zombie
-    inner.task_status = TaskStatus::Zombie;
-    // Record exit code
-    inner.exit_code = exit_code;
-    // do not move to its parent but under initproc
-
-    // ++++++ access initproc TCB exclusively
-    {
-        let mut initproc_inner = INITPROC.inner_exclusive_access();
-        for child in inner.children.iter() {
-            child.inner_exclusive_access().parent = Some(Arc::downgrade(&INITPROC));
-            initproc_inner.children.push(child.clone());
-        }
-    }
-    // ++++++ release parent PCB
-
-    inner.children.clear();
-    // deallocate user space
-    inner.memory_set.recycle_data_pages();
-    drop(inner);
-    // **** release current PCB
-    // drop task manually to maintain rc correctly
-    drop(task);
-    // we do not have to save task context
-    let mut _unused = TaskContext::zero_init();
-    schedule(&mut _unused as *mut _);
+    todo!("task::exit_current_and_run_next")
 }
 
 lazy_static! {

@@ -1,8 +1,11 @@
-//!Implementation of [`Processor`] and Intersection of control flow
+//! Processor state and idle-to-process context switching for chapter 5.
 //!
-//! Here, the continuous operation of user apps in CPU is maintained,
-//! the current running state of CPU is recorded,
-//! and the replacement and transfer of control flow of different applications are executed.
+//! The idle context runs the scheduler; it is not a user process or PID.
+//! While a process runs, `current` owns it and its status is `Running`.
+//! No dynamic borrow may remain active across a context switch.
+
+// Allow unused items, imports, and parameters in the exercise skeleton.
+#![allow(dead_code, unused_imports, unused_variables)]
 
 use super::__switch;
 use super::{fetch_task, TaskStatus};
@@ -50,30 +53,16 @@ lazy_static! {
     pub static ref PROCESSOR: UPSafeCell<Processor> = unsafe { UPSafeCell::new(Processor::new()) };
 }
 
-///The main part of process execution and scheduling
-///Loop `fetch_task` to get the process that needs to run, and switch the process through `__switch`
+/// Todo: Run the scheduler's idle control flow.
+///
+/// Inputs: The global processor and ready queue, with initproc already enqueued.
+/// Output: Repeatedly dispatch ready processes; never return to kernel startup.
+/// Constraints: Select through `fetch_task`, mark the process `Running`, and
+/// install it as `current` before switching from idle to its task context.
+/// Resume selection when idle regains control. An empty queue keeps idle alive.
+/// Release all dynamic borrows before switching and keep both contexts valid.
 pub fn run_tasks() {
-    loop {
-        let mut processor = PROCESSOR.exclusive_access();
-        if let Some(task) = fetch_task() {
-            let idle_task_cx_ptr = processor.get_idle_task_cx_ptr();
-            // access coming task TCB exclusively
-            let mut task_inner = task.inner_exclusive_access();
-            let next_task_cx_ptr = &task_inner.task_cx as *const TaskContext;
-            task_inner.task_status = TaskStatus::Running;
-            // release coming task_inner manually
-            drop(task_inner);
-            // release coming task TCB manually
-            processor.current = Some(task);
-            // release processor manually
-            drop(processor);
-            unsafe {
-                __switch(idle_task_cx_ptr, next_task_cx_ptr);
-            }
-        } else {
-            warn!("no tasks available in run_tasks");
-        }
-    }
+    todo!("task::processor::run_tasks")
 }
 
 /// Get current task through take, leaving a None in its place
@@ -100,12 +89,15 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
         .get_trap_cx()
 }
 
-///Return to idle control flow for new scheduling
+/// Todo: Save the caller's task context and return control to idle.
+///
+/// Inputs: `switched_task_cx_ptr` points to writable task-context storage that
+/// remains valid during the switch. The caller has removed `current` and
+/// finished the process's state and queue updates, releasing all dynamic borrows.
+/// Output: Idle resumes scheduling. This call returns only if the saved context
+/// is later scheduled again; the exit path's context is never resumed.
+/// Constraints: Switch to the processor's idle context without selecting a task
+/// or changing its stride here. Hold no processor borrow across the switch.
 pub fn schedule(switched_task_cx_ptr: *mut TaskContext) {
-    let mut processor = PROCESSOR.exclusive_access();
-    let idle_task_cx_ptr = processor.get_idle_task_cx_ptr();
-    drop(processor);
-    unsafe {
-        __switch(switched_task_cx_ptr, idle_task_cx_ptr);
-    }
+    todo!("task::processor::schedule")
 }

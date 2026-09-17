@@ -1,5 +1,4 @@
 //! Process management syscalls
-use alloc::sync::Arc;
 use core::mem::size_of;
 
 use crate::{
@@ -79,37 +78,13 @@ pub fn sys_waitpid(pid: isize, exit_code_ptr: *mut i32) -> isize {
         pid
     );
     let task = current_task().unwrap();
-    // find a child process
-
-    // ---- access current PCB exclusively
-    let mut inner = task.inner_exclusive_access();
-    if !inner
-        .children
-        .iter()
-        .any(|p| pid == -1 || pid as usize == p.getpid())
-    {
-        return -1;
-        // ---- release current PCB
+    match task.waitpid(pid) {
+        Ok((found_pid, exit_code)) => {
+            *translated_refmut(task.get_user_token(), exit_code_ptr) = exit_code;
+            found_pid as isize
+        }
+        Err(error) => error,
     }
-    let pair = inner.children.iter().enumerate().find(|(_, p)| {
-        // ++++ temporarily access child PCB exclusively
-        p.inner_exclusive_access().is_zombie() && (pid == -1 || pid as usize == p.getpid())
-        // ++++ release child PCB
-    });
-    if let Some((idx, _)) = pair {
-        let child = inner.children.remove(idx);
-        // confirm that child will be deallocated after being removed from children list
-        assert_eq!(Arc::strong_count(&child), 1);
-        let found_pid = child.getpid();
-        // ++++ temporarily access child PCB exclusively
-        let exit_code = child.inner_exclusive_access().exit_code;
-        // ++++ release child PCB
-        *translated_refmut(inner.memory_set.token(), exit_code_ptr) = exit_code;
-        found_pid as isize
-    } else {
-        -2
-    }
-    // ---- release current PCB automatically
 }
 
 /// 获取时间，并按当前进程的页表分段写回可能跨页的 TimeVal。
@@ -236,9 +211,5 @@ pub fn sys_set_priority(prio: isize) -> isize {
         "kernel:pid[{}] sys_set_priority",
         current_task().unwrap().pid.0
     );
-    if prio < 2 {
-        return -1;
-    }
-    current_task().unwrap().inner_exclusive_access().prio = prio as usize;
-    prio
+    current_task().unwrap().set_priority(prio)
 }
