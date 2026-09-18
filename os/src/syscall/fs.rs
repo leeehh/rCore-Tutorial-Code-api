@@ -4,9 +4,6 @@
 //! are provided, including descriptor/permission checks and user-buffer
 //! translation for read/write. Preserve their behavior and all public signatures.
 
-// Allow imports and parameters used by the two exercise interfaces.
-#![allow(unused_imports, unused_variables)]
-
 use crate::config::PAGE_SIZE;
 use crate::fs::{link_file, make_pipe, open_file, unlink_file, OpenFlags, Stat};
 use crate::mm::{
@@ -100,7 +97,20 @@ pub fn sys_close(fd: usize) -> isize {
 /// Invalid user pointers and allocation-failure rollback are outside the input
 /// contract. No new address-translation or descriptor-management API is needed.
 pub fn sys_pipe(pipe: *mut usize) -> isize {
-    todo!("syscall::sys_pipe")
+    let token = current_user_token();
+    let task = current_task().unwrap();
+    let (read_end, write_end) = make_pipe();
+    let mut inner = task.inner_exclusive_access();
+    let read_fd = inner.alloc_fd();
+    inner.fd_table[read_fd] = Some(read_end);
+    let write_fd = inner.alloc_fd();
+    inner.fd_table[write_fd] = Some(write_end);
+    drop(inner);
+
+    // Translate separately: the two descriptors may lie on different pages.
+    *translated_refmut(token, pipe) = read_fd;
+    *translated_refmut(token, (pipe as usize + size_of::<usize>()) as *mut usize) = write_fd;
+    0
 }
 
 /// Duplicate a descriptor into the smallest free slot (syscall 24).
@@ -111,7 +121,15 @@ pub fn sys_pipe(pipe: *mut usize) -> isize {
 /// share offsets for ordinary files and extend endpoint lifetimes for pipes.
 /// The original descriptor and all other occupied slots remain unchanged.
 pub fn sys_dup(fd: usize) -> isize {
-    todo!("syscall::sys_dup")
+    let task = current_task().unwrap();
+    let mut inner = task.inner_exclusive_access();
+    let file = match inner.fd_table.get(fd).and_then(|entry| entry.as_ref()) {
+        Some(file) => Arc::clone(file),
+        None => return -1,
+    };
+    let new_fd = inner.alloc_fd();
+    inner.fd_table[new_fd] = Some(file);
+    new_fd as isize
 }
 
 /// Get an open file's metadata and copy it into the caller's address space.
