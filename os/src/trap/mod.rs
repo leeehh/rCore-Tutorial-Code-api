@@ -1,16 +1,20 @@
-//! Trap handling functionality
+//! User trap handling for the chapter 2 API exercise.
 //!
 //! For rCore, we have a single trap entry point, namely `__alltraps`. At
 //! initialization in [`init()`], we set the `stvec` CSR to point to it.
 //!
 //! All traps go through `__alltraps`, which is defined in `trap.S`. The
-//! assembly language code does just enough work restore the kernel space
-//! context, ensuring that Rust code safely runs, and transfers control to
+//! assembly language code saves the user context on the kernel stack and
+//! transfers control to
 //! [`trap_handler()`].
 //!
-//! It then calls different functionality based on what exactly the exception
-//! was. For example, timer interrupts trigger task preemption, and syscalls go
-//! to [`syscall()`].
+//! Complete only trap_handler() here. It dispatches user ecalls, terminates
+//! applications that cause the supported faults, and diagnoses unsupported
+//! traps. This chapter has no timer preemption. Keep init(), TrapContext, and
+//! the assembly save/restore path as provided.
+
+// Allow imports and the context parameter to remain in the exercise skeleton.
+#![allow(unused_imports, unused_variables)]
 
 mod context;
 
@@ -36,32 +40,28 @@ pub fn init() {
 }
 
 #[no_mangle]
-/// handle an interrupt, exception, or system call from user space
+/// Handle a trap using its CSR cause and the user context saved by __alltraps.
+///
+/// Read scause and stval through the provided register interfaces. For
+/// UserEnvCall, advance cx.sepc by exactly 4 before dispatch so execution resumes
+/// after ecall. The syscall ID is cx.x[17] (a7); arguments are cx.x[10..=12]
+/// (a0..a2). If syscall() returns, cast its isize result to usize into cx.x[10]
+/// and return the same cx for __restore. Preserve sstatus and all other saved
+/// registers. The exit syscall does not return to this context.
+///
+/// StoreFault and StorePageFault print the existing PageFault message, then
+/// call run_next_app(), which does not return. IllegalInstruction prints the
+/// existing IllegalInstruction message and also runs the next application.
+/// Do not resume a faulting application or advance its sepc as if it made an
+/// ecall. The messages are:
+/// `[kernel] PageFault in application, kernel killed it.`
+/// `[kernel] IllegalInstruction in application, kernel killed it.`
+///
+/// All other causes, including unsupported interrupts, panic with the cause
+/// and stval. Do not add scheduling or fault recovery. Application loading,
+/// context restoration, and successful shutdown after the last app are provided.
 pub fn trap_handler(cx: &mut TrapContext) -> &mut TrapContext {
-    let scause = scause::read(); // get trap cause
-    let stval = stval::read(); // get extra value
-    match scause.cause() {
-        Trap::Exception(Exception::UserEnvCall) => {
-            cx.sepc += 4;
-            cx.x[10] = syscall(cx.x[17], [cx.x[10], cx.x[11], cx.x[12]]) as usize;
-        }
-        Trap::Exception(Exception::StoreFault) | Trap::Exception(Exception::StorePageFault) => {
-            println!("[kernel] PageFault in application, kernel killed it.");
-            run_next_app();
-        }
-        Trap::Exception(Exception::IllegalInstruction) => {
-            println!("[kernel] IllegalInstruction in application, kernel killed it.");
-            run_next_app();
-        }
-        _ => {
-            panic!(
-                "Unsupported trap {:?}, stval = {:#x}!",
-                scause.cause(),
-                stval
-            );
-        }
-    }
-    cx
+    todo!("ch2 API: implement trap_handler")
 }
 
 pub use context::TrapContext;
