@@ -1,7 +1,11 @@
 //! File and filesystem-related syscalls
-use crate::fs::{open_file, OpenFlags, Stat};
-use crate::mm::{translated_byte_buffer, translated_str, UserBuffer};
+use crate::config::PAGE_SIZE;
+use crate::fs::{link_file, open_file, unlink_file, OpenFlags, Stat};
+use crate::mm::{
+    translated_byte_buffer, translated_str, MapPermission, PageTable, UserBuffer, VirtAddr,
+};
 use crate::task::{current_task, current_user_token};
+use core::mem::size_of;
 
 pub fn sys_write(fd: usize, buf: *const u8, len: usize) -> isize {
     trace!("kernel:pid[{}] sys_write", current_task().unwrap().pid.0);
@@ -75,29 +79,67 @@ pub fn sys_close(fd: usize) -> isize {
     0
 }
 
-/// YOUR JOB: Implement fstat.
-pub fn sys_fstat(_fd: usize, _st: *mut Stat) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_fstat NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+/// Get an open file's metadata and copy it into the caller's address space.
+pub fn sys_fstat(fd: usize, st: *mut Stat) -> isize {
+    trace!("kernel:pid[{}] sys_fstat", current_task().unwrap().pid.0);
+    let task = current_task().unwrap();
+    let file = {
+        let inner = task.inner_exclusive_access();
+        match inner.fd_table.get(fd).and_then(|entry| entry.as_ref()) {
+            Some(file) => file.clone(),
+            None => return -1,
+        }
+    };
+    let stat = match file.stat() {
+        Some(stat) => stat,
+        None => return -1,
+    };
+    let token = current_user_token();
+    let len = size_of::<Stat>();
+    let mut start = st as usize;
+    let end = match start.checked_add(len) {
+        Some(end) => end,
+        None => return -1,
+    };
+    // Check the whole destination before writing, including a possible second page.
+    let page_table = PageTable::from_token(token);
+    while start < end {
+        let va = VirtAddr::from(start);
+        if usize::from(va) != start {
+            return -1;
+        }
+        match page_table.translate(va.floor()) {
+            Some(pte)
+                if pte.is_valid()
+                    && pte.writable()
+                    && pte.flags().bits() & MapPermission::U.bits() != 0 => {}
+            _ => return -1,
+        }
+        start += (PAGE_SIZE - va.page_offset()).min(end - start);
+    }
+    // Stat's C layout has no implicit padding; its explicit pad is initialized.
+    let bytes = unsafe { core::slice::from_raw_parts(&stat as *const Stat as *const u8, len) };
+    let mut offset = 0;
+    for buffer in translated_byte_buffer(token, st as *const u8, len) {
+        let next = offset + buffer.len();
+        buffer.copy_from_slice(&bytes[offset..next]);
+        offset = next;
+    }
+    0
 }
 
-/// YOUR JOB: Implement linkat.
-pub fn sys_linkat(_old_name: *const u8, _new_name: *const u8) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_linkat NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+/// Create a second directory entry referring to the same file inode.
+pub fn sys_linkat(old_name: *const u8, new_name: *const u8) -> isize {
+    trace!("kernel:pid[{}] sys_linkat", current_task().unwrap().pid.0);
+    let token = current_user_token();
+    let old_name = translated_str(token, old_name);
+    let new_name = translated_str(token, new_name);
+    link_file(&old_name, &new_name).map_or(-1, |_| 0)
 }
 
-/// YOUR JOB: Implement unlinkat.
-pub fn sys_unlinkat(_name: *const u8) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_unlinkat NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+/// Remove a file name, reclaiming the file after its final hard link.
+pub fn sys_unlinkat(name: *const u8) -> isize {
+    trace!("kernel:pid[{}] sys_unlinkat", current_task().unwrap().pid.0);
+    let name = translated_str(current_user_token(), name);
+    unlink_file(&name).map_or(-1, |_| 0)
 }
