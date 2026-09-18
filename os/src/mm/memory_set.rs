@@ -66,6 +66,60 @@ impl MemorySet {
             None,
         );
     }
+    /// Map an anonymous area, rejecting conflicts and rolling back on allocation failure.
+    pub fn mmap(
+        &mut self,
+        start_va: VirtAddr,
+        end_va: VirtAddr,
+        permission: MapPermission,
+    ) -> Option<()> {
+        let mut area = MapArea::new(start_va, end_va, MapType::Framed, permission);
+        if area
+            .vpn_range
+            .into_iter()
+            .any(|vpn| self.translate(vpn).map_or(false, |pte| pte.is_valid()))
+        {
+            return None;
+        }
+        let flags = PTEFlags::from_bits(permission.bits).unwrap();
+        let mut mapped_end = area.vpn_range.get_start();
+        for vpn in area.vpn_range {
+            let frame = match frame_alloc() {
+                Some(frame) => frame,
+                None => break,
+            };
+            if self.page_table.map(vpn, frame.ppn, flags).is_none() {
+                break;
+            }
+            area.data_frames.insert(vpn, frame);
+            mapped_end.step();
+        }
+        if mapped_end != area.vpn_range.get_end() {
+            // Remove successful mappings before dropping the area's data frames.
+            for vpn in VPNRange::new(area.vpn_range.get_start(), mapped_end) {
+                self.page_table.unmap(vpn);
+            }
+            return None;
+        }
+        // Register the area so fork copies it and process exit reclaims it.
+        self.areas.push(area);
+        Some(())
+    }
+
+    /// Unmap a complete framed user area with exactly matching page bounds.
+    pub fn munmap(&mut self, start_va: VirtAddr, end_va: VirtAddr) -> Option<()> {
+        let start = start_va.floor();
+        let end = end_va.ceil();
+        let index = self.areas.iter().position(|area| {
+            area.map_type == MapType::Framed
+                && area.map_perm.contains(MapPermission::U)
+                && area.vpn_range.get_start() == start
+                && area.vpn_range.get_end() == end
+        })?;
+        let mut area = self.areas.remove(index);
+        area.unmap(&mut self.page_table);
+        Some(())
+    }
     /// remove a area
     pub fn remove_area_with_start_vpn(&mut self, start_vpn: VirtPageNum) {
         if let Some((idx, area)) = self
@@ -90,11 +144,13 @@ impl MemorySet {
     }
     /// Mention that trampoline is not collected by areas.
     fn map_trampoline(&mut self) {
-        self.page_table.map(
-            VirtAddr::from(TRAMPOLINE).into(),
-            PhysAddr::from(strampoline as usize).into(),
-            PTEFlags::R | PTEFlags::X,
-        );
+        self.page_table
+            .map(
+                VirtAddr::from(TRAMPOLINE).into(),
+                PhysAddr::from(strampoline as usize).into(),
+                PTEFlags::R | PTEFlags::X,
+            )
+            .unwrap();
     }
     /// Without kernel stacks.
     pub fn new_kernel() -> Self {
@@ -364,7 +420,7 @@ impl MapArea {
             }
         }
         let pte_flags = PTEFlags::from_bits(self.map_perm.bits).unwrap();
-        page_table.map(vpn, ppn, pte_flags);
+        page_table.map(vpn, ppn, pte_flags).unwrap();
     }
     pub fn unmap_one(&mut self, page_table: &mut PageTable, vpn: VirtPageNum) {
         if self.map_type == MapType::Framed {

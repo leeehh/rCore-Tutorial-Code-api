@@ -8,13 +8,21 @@ use bitflags::*;
 bitflags! {
     /// page table entry flags
     pub struct PTEFlags: u8 {
+        /// Valid entry.
         const V = 1 << 0;
+        /// Readable page.
         const R = 1 << 1;
+        /// Writable page.
         const W = 1 << 2;
+        /// Executable page.
         const X = 1 << 3;
+        /// Accessible from user mode.
         const U = 1 << 4;
+        /// Global mapping.
         const G = 1 << 5;
+        /// Page has been accessed.
         const A = 1 << 6;
+        /// Page has been written.
         const D = 1 << 7;
     }
 }
@@ -99,7 +107,7 @@ impl PageTable {
                 break;
             }
             if !pte.is_valid() {
-                let frame = frame_alloc().unwrap();
+                let frame = frame_alloc()?;
                 *pte = PageTableEntry::new(frame.ppn, PTEFlags::V);
                 self.frames.push(frame);
             }
@@ -125,12 +133,14 @@ impl PageTable {
         }
         result
     }
-    /// set the map between virtual page number and physical page number
-    #[allow(unused)]
-    pub fn map(&mut self, vpn: VirtPageNum, ppn: PhysPageNum, flags: PTEFlags) {
-        let pte = self.find_pte_create(vpn).unwrap();
-        assert!(!pte.is_valid(), "vpn {:?} is mapped before mapping", vpn);
+    /// Map a page, returning failure for conflicts or exhausted page table frames.
+    pub fn map(&mut self, vpn: VirtPageNum, ppn: PhysPageNum, flags: PTEFlags) -> Option<()> {
+        let pte = self.find_pte_create(vpn)?;
+        if pte.is_valid() {
+            return None;
+        }
         *pte = PageTableEntry::new(ppn, flags | PTEFlags::V);
+        Some(())
     }
     /// remove the map between virtual page number and physical page number
     #[allow(unused)]
