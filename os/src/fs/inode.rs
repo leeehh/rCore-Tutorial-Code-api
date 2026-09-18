@@ -8,9 +8,6 @@
 //! implements file operations without allocating descriptors or translating user
 //! pointers. Internal helpers may be designed freely within the fixed interfaces.
 
-// Allow unused items, imports, and parameters in the exercise skeleton.
-#![allow(dead_code, unused_imports, unused_variables)]
-
 use super::{File, Stat, StatMode};
 use crate::drivers::BLOCK_DEVICE;
 use crate::mm::UserBuffer;
@@ -44,7 +41,7 @@ impl OSInode {
             inner: unsafe { UPSafeCell::new(OSInodeInner { offset: 0, inode }) },
         }
     }
-    /// Todo: Read the remaining contents of this open file.
+    /// Read the remaining contents of this open file.
     ///
     /// Inputs: `self` is a readable file object at its current offset.
     /// Output: A vector containing bytes from that offset through EOF.
@@ -52,7 +49,18 @@ impl OSInode {
     /// do not reset it to zero. At EOF return an empty vector. Program loading
     /// obtains the entire ELF by calling this on a newly opened file at offset 0.
     pub fn read_all(&self) -> Vec<u8> {
-        todo!("fs::OSInode::read_all")
+        let mut inner = self.inner.exclusive_access();
+        let mut data = Vec::new();
+        let mut buffer = [0u8; 512];
+        loop {
+            let read = inner.inode.read_at(inner.offset, &mut buffer);
+            if read == 0 {
+                break;
+            }
+            data.extend_from_slice(&buffer[..read]);
+            inner.offset += read;
+        }
+        data
     }
 }
 
@@ -102,7 +110,7 @@ impl OpenFlags {
     }
 }
 
-/// Todo: Open, create, or truncate a regular file in the root directory.
+/// Open, create, or truncate a regular file in the root directory.
 ///
 /// Inputs: `name` is a valid single-component name of at most 27 bytes;
 /// `flags` uses the supplied OpenFlags definition.
@@ -113,7 +121,18 @@ impl OpenFlags {
 /// with TRUNC. Every successful call has an independent offset. Do not allocate
 /// a file descriptor or replace the inode when truncating an existing file.
 pub fn open_file(name: &str, flags: OpenFlags) -> Option<Arc<OSInode>> {
-    todo!("fs::open_file")
+    let (readable, writable) = flags.read_write();
+    let inode = if let Some(inode) = ROOT_INODE.find(name) {
+        if flags.intersects(OpenFlags::CREATE | OpenFlags::TRUNC) {
+            inode.clear();
+        }
+        inode
+    } else if flags.contains(OpenFlags::CREATE) {
+        ROOT_INODE.create(name)?
+    } else {
+        return None;
+    };
+    Some(Arc::new(OSInode::new(readable, writable, inode)))
 }
 
 /// Add a hard link to an existing file in the root directory.
@@ -127,7 +146,7 @@ pub fn unlink_file(name: &str) -> Option<()> {
 }
 
 impl File for OSInode {
-    /// Todo: Translate current inode metadata into the syscall Stat layout.
+    /// Translate current inode metadata into the syscall Stat layout.
     ///
     /// Inputs: `self` is an open object referring to a live filesystem inode.
     /// Output: `Some(Stat)` with dev 0, the inode ID, current nlink, DIR or FILE
@@ -136,7 +155,19 @@ impl File for OSInode {
     /// been linked or unlinked since open. Preserve the offset and let the
     /// supplied syscall copy the result to the caller's address space.
     fn stat(&self) -> Option<Stat> {
-        todo!("fs::OSInode::stat")
+        let inner = self.inner.exclusive_access();
+        let (inode_id, nlink, is_dir) = inner.inode.stat();
+        Some(Stat {
+            dev: 0,
+            ino: inode_id as u64,
+            mode: if is_dir {
+                StatMode::DIR
+            } else {
+                StatMode::FILE
+            },
+            nlink,
+            pad: [0; 7],
+        })
     }
     fn readable(&self) -> bool {
         self.readable
@@ -144,7 +175,7 @@ impl File for OSInode {
     fn writable(&self) -> bool {
         self.writable
     }
-    /// Todo: Read from the current offset into a translated user buffer.
+    /// Read from the current offset into a translated user buffer.
     ///
     /// Inputs: `buf` contains backing slices in user virtual-address order;
     /// the caller has checked readability and provided writable mapped memory.
@@ -153,9 +184,19 @@ impl File for OSInode {
     /// memory. Advance offset by actual bytes read, leaving the unused buffer
     /// suffix intact. An empty buffer returns 0 without advancing the offset.
     fn read(&self, buf: UserBuffer) -> usize {
-        todo!("fs::OSInode::read")
+        let mut inner = self.inner.exclusive_access();
+        let mut total = 0;
+        for buffer in buf.buffers {
+            let read = inner.inode.read_at(inner.offset, buffer);
+            inner.offset += read;
+            total += read;
+            if read < buffer.len() {
+                break;
+            }
+        }
+        total
     }
-    /// Todo: Write a translated user buffer at the current offset.
+    /// Write a translated user buffer at the current offset.
     ///
     /// Inputs: `buf` contains source slices in user virtual-address order;
     /// writability is checked by the caller and file capacity is sufficient.
@@ -165,6 +206,14 @@ impl File for OSInode {
     /// bytes written. An empty buffer returns 0 without changing the offset.
     /// Do not translate addresses again or acquire the same inner borrow twice.
     fn write(&self, buf: UserBuffer) -> usize {
-        todo!("fs::OSInode::write")
+        let mut inner = self.inner.exclusive_access();
+        let mut total = 0;
+        for buffer in buf.buffers {
+            let written = inner.inode.write_at(inner.offset, buffer);
+            assert_eq!(written, buffer.len());
+            inner.offset += written;
+            total += written;
+        }
+        total
     }
 }

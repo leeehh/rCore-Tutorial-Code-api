@@ -13,9 +13,6 @@
 //!
 //! Internal helpers may be designed freely within the supplied interfaces.
 
-// Allow unused items, imports, and parameters in the exercise skeleton.
-#![allow(dead_code, unused_imports, unused_variables)]
-
 use super::{
     block_cache_sync_all, get_block_cache, BlockDevice, DirEntry, DiskInode, DiskInodeType,
     EasyFileSystem, DIRENT_SZ,
@@ -59,14 +56,26 @@ impl Inode {
             .lock()
             .modify(self.block_offset, f)
     }
-    /// Todo: Query the identity and current metadata of this inode.
+    /// Construct a handle while the caller already holds the filesystem lock.
+    fn inode_from_id(&self, inode_id: u32, fs: &EasyFileSystem) -> Self {
+        let (block_id, block_offset) = fs.get_disk_inode_pos(inode_id);
+        Self::new(
+            block_id,
+            block_offset,
+            Arc::clone(&self.fs),
+            Arc::clone(&self.block_device),
+        )
+    }
+    /// Query the identity and current metadata of this inode.
     ///
     /// Inputs: `self` identifies a live inode in this filesystem.
     /// Output: `(inode_id, nlink, is_directory)` from its current disk metadata.
     /// Constraints: The inode ID agrees with its disk position. Read the stored
     /// hard-link count, not an Arc reference count, without changing the inode.
     pub fn stat(&self) -> (u32, u32, bool) {
-        todo!("easy_fs::Inode::stat")
+        let fs = self.fs.lock();
+        let inode_id = fs.get_disk_inode_id(self.block_id as u32, self.block_offset);
+        self.read_disk_inode(|disk_inode| (inode_id, disk_inode.nlink, disk_inode.is_dir()))
     }
     /// Find inode under a disk inode by name
     fn find_inode_id(&self, name: &str, disk_inode: &DiskInode) -> Option<u32> {
@@ -91,14 +100,16 @@ impl Inode {
         }
         None
     }
-    /// Todo: Find a named entry in this directory.
+    /// Find a named entry in this directory.
     ///
     /// Inputs: `self` is a directory; `name` is a single-component file name.
     /// Output: An `Arc<Inode>` for the entry, or `None` if it does not exist.
     /// Constraints: Skip empty entries. The result refers to the existing disk
     /// inode on the same filesystem and device; no inode or file data is copied.
     pub fn find(&self, name: &str) -> Option<Arc<Inode>> {
-        todo!("easy_fs::Inode::find")
+        let fs = self.fs.lock();
+        let inode_id = self.read_disk_inode(|disk_inode| self.find_inode_id(name, disk_inode))?;
+        Some(Arc::new(self.inode_from_id(inode_id, &fs)))
     }
     /// Increase the size of a disk inode
     fn increase_size(
@@ -146,7 +157,7 @@ impl Inode {
             DIRENT_SZ,
         );
     }
-    /// Todo: Create an empty regular file in this directory.
+    /// Create an empty regular file in this directory.
     ///
     /// Inputs: `self` is a directory and `name` is a valid name of at most 27
     /// bytes. Inode and data-block allocation have sufficient free space.
@@ -155,9 +166,25 @@ impl Inode {
     /// directory entry, reusing an empty slot when available, and synchronize
     /// changes. A duplicate name leaves the existing file and directory intact.
     pub fn create(&self, name: &str) -> Option<Arc<Inode>> {
-        todo!("easy_fs::Inode::create")
+        let mut fs = self.fs.lock();
+        if self
+            .read_disk_inode(|disk_inode| self.find_inode_id(name, disk_inode))
+            .is_some()
+        {
+            return None;
+        }
+        let inode_id = fs.alloc_inode();
+        let inode = Arc::new(self.inode_from_id(inode_id, &fs));
+        // The new inode may share the directory's cache block, so initialize
+        // it before acquiring the directory's cache lock again.
+        inode.modify_disk_inode(|disk_inode| disk_inode.initialize(DiskInodeType::File));
+        self.modify_disk_inode(|disk_inode| {
+            self.append_dirent(name, inode_id, disk_inode, &mut fs);
+        });
+        block_cache_sync_all();
+        Some(inode)
     }
-    /// Todo: Add another name for an existing regular file in this directory.
+    /// Add another name for an existing regular file in this directory.
     ///
     /// Inputs: `old_name` names the source and `new_name` is at most 27 bytes.
     /// Output: `Some(())` on success; `None` for a non-directory receiver,
@@ -167,9 +194,38 @@ impl Inode {
     /// directory entry and increment stored nlink once, synchronizing changes.
     /// Rejected requests change neither directory entries nor the link count.
     pub fn link(&self, old_name: &str, new_name: &str) -> Option<()> {
-        todo!("easy_fs::Inode::link")
+        if new_name.is_empty()
+            || new_name.len() > 27
+            || new_name.bytes().any(|byte| byte == 0 || byte == b'/')
+            || new_name == "."
+            || new_name == ".."
+        {
+            return None;
+        }
+        let mut fs = self.fs.lock();
+        let inode_id = self.read_disk_inode(|disk_inode| {
+            if !disk_inode.is_dir() || self.find_inode_id(new_name, disk_inode).is_some() {
+                return None;
+            }
+            self.find_inode_id(old_name, disk_inode)
+        })?;
+        let inode = self.inode_from_id(inode_id, &fs);
+        let nlink = inode.read_disk_inode(|disk_inode| {
+            if !disk_inode.is_file() {
+                return None;
+            }
+            disk_inode.nlink.checked_add(1)
+        })?;
+        // Validate everything before updating either inode. Cache guards do
+        // not overlap, while the filesystem lock covers the whole operation.
+        self.modify_disk_inode(|disk_inode| {
+            self.append_dirent(new_name, inode_id, disk_inode, &mut fs);
+        });
+        inode.modify_disk_inode(|disk_inode| disk_inode.nlink = nlink);
+        block_cache_sync_all();
+        Some(())
     }
-    /// Todo: Remove a regular file's name from this directory.
+    /// Remove a regular file's name from this directory.
     ///
     /// Inputs: `name` identifies the directory entry to remove.
     /// Output: `Some(())` on success; `None` for a non-directory receiver,
@@ -180,18 +236,63 @@ impl Inode {
     /// Synchronize changes; failures leave the filesystem unchanged. Final
     /// unlink reclaims immediately; callers do not reuse old handles afterward.
     pub fn unlink(&self, name: &str) -> Option<()> {
-        todo!("easy_fs::Inode::unlink")
+        let mut fs = self.fs.lock();
+        let (offset, inode_id) = self.read_disk_inode(|disk_inode| {
+            if !disk_inode.is_dir() {
+                return None;
+            }
+            self.find_dirent(name, disk_inode)
+        })?;
+        let inode = self.inode_from_id(inode_id, &fs);
+        let nlink = inode.read_disk_inode(|disk_inode| {
+            if !disk_inode.is_file() {
+                return None;
+            }
+            disk_inode.nlink.checked_sub(1)
+        })?;
+        self.modify_disk_inode(|disk_inode| {
+            assert_eq!(
+                disk_inode.write_at(offset, DirEntry::empty().as_bytes(), &self.block_device),
+                DIRENT_SZ,
+            );
+        });
+        inode.modify_disk_inode(|disk_inode| {
+            disk_inode.nlink = nlink;
+            if nlink == 0 {
+                inode.clear_inode_data(disk_inode, &mut fs);
+            }
+        });
+        if nlink == 0 {
+            fs.dealloc_inode(inode_id);
+        }
+        block_cache_sync_all();
+        Some(())
     }
-    /// Todo: List the live names in this directory.
+    /// List the live names in this directory.
     ///
     /// Inputs: `self` is a directory.
     /// Output: Names in directory-entry order, one per live entry.
     /// Constraints: Skip empty slots. Different hard-link names remain separate
     /// entries even when they share an inode ID. Do not change the directory.
     pub fn ls(&self) -> Vec<String> {
-        todo!("easy_fs::Inode::ls")
+        let _fs = self.fs.lock();
+        self.read_disk_inode(|disk_inode| {
+            assert!(disk_inode.is_dir());
+            let mut names = Vec::new();
+            let mut dirent = DirEntry::empty();
+            for offset in (0..disk_inode.size as usize).step_by(DIRENT_SZ) {
+                assert_eq!(
+                    disk_inode.read_at(offset, dirent.as_bytes_mut(), &self.block_device),
+                    DIRENT_SZ,
+                );
+                if dirent.inode_id() != 0 {
+                    names.push(String::from(dirent.name()));
+                }
+            }
+            names
+        })
     }
-    /// Todo: Read inode data at an explicit byte offset.
+    /// Read inode data at an explicit byte offset.
     ///
     /// Inputs: `offset` is the starting position; `buf` is the destination.
     /// The requested range calculation does not overflow.
@@ -200,9 +301,10 @@ impl Inode {
     /// Constraints: Only the returned prefix of `buf` is overwritten. Preserve
     /// file data and metadata; this layer has no per-open read/write offset.
     pub fn read_at(&self, offset: usize, buf: &mut [u8]) -> usize {
-        todo!("easy_fs::Inode::read_at")
+        let _fs = self.fs.lock();
+        self.read_disk_inode(|disk_inode| disk_inode.read_at(offset, buf, &self.block_device))
     }
-    /// Todo: Write inode data at an explicit byte offset.
+    /// Write inode data at an explicit byte offset.
     ///
     /// Inputs: `buf` is the source; `offset + buf.len()` fits the supported
     /// file capacity and does not overflow. Free blocks are sufficient.
@@ -212,9 +314,18 @@ impl Inode {
     /// inode ID or nlink. Preserve existing data outside the written range
     /// and synchronize the changes before returning.
     pub fn write_at(&self, offset: usize, buf: &[u8]) -> usize {
-        todo!("easy_fs::Inode::write_at")
+        if buf.is_empty() {
+            return 0;
+        }
+        let mut fs = self.fs.lock();
+        let written = self.modify_disk_inode(|disk_inode| {
+            self.increase_size((offset + buf.len()) as u32, disk_inode, &mut fs);
+            disk_inode.write_at(offset, buf, &self.block_device)
+        });
+        block_cache_sync_all();
+        written
     }
-    /// Todo: Truncate a regular file to zero bytes.
+    /// Truncate a regular file to zero bytes.
     ///
     /// Inputs: `self` identifies a live regular file, possibly already empty.
     /// Output: `()`; file size becomes 0 and its data and index blocks are freed.
@@ -222,7 +333,9 @@ impl Inode {
     /// and directory entries. All hard-link names observe the empty file.
     /// Synchronize the changes; truncation does not reset OS-level offsets.
     pub fn clear(&self) {
-        todo!("easy_fs::Inode::clear")
+        let mut fs = self.fs.lock();
+        self.modify_disk_inode(|disk_inode| self.clear_inode_data(disk_inode, &mut fs));
+        block_cache_sync_all();
     }
     /// Shared data-block reclamation for truncation and final unlink.
     fn clear_inode_data(&self, disk_inode: &mut DiskInode, fs: &mut MutexGuard<EasyFileSystem>) {
