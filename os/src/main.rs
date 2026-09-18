@@ -1,11 +1,12 @@
-//! The main module and entrypoint
+//! Bare-metal Rust entry point for the chapter 1 API exercise.
 //!
-//! The operating system and app also starts in this module. Kernel code starts
-//! executing from `entry.asm`, after which [`rust_main()`] is called to
-//! initialize various pieces of functionality [`clear_bss()`]. (See its source code for
-//! details.)
+//! The provided assembly entry sets the stack pointer before calling
+//! [`rust_main()`]. Complete this one function while preserving the entry
+//! attributes, linker-symbol declarations, and all supporting implementations.
 //!
-//! We then call [`println!`] to display `Hello, world!`.
+//! No host runtime initializes this program. [`clear_bss()`] establishes zeroed
+//! global storage; console output uses the provided SBI wrapper. Successful
+//! execution ends through the board's QEMU exit device rather than returning.
 
 #![deny(missing_docs)]
 #![deny(warnings)]
@@ -14,20 +15,26 @@
 #![feature(panic_info_message)]
 
 use core::arch::global_asm;
+// These macros are used when completing rust_main().
+#[allow(unused_imports)]
 use log::*;
 
 #[macro_use]
 mod console;
 mod lang_items;
+// The provided logger and success-exit path are unused until the TODO is filled.
+#[allow(dead_code)]
 mod logging;
 mod sbi;
 
 #[path = "boards/qemu.rs"]
+#[allow(dead_code)]
 mod board;
 
 global_asm!(include_str!("entry.asm"));
 
-/// clear BSS segment
+/// Clear [sbss, ebss), excluding the active boot stack placed before sbss.
+/// This implementation is provided; call it before initializing global state.
 pub fn clear_bss() {
     extern "C" {
         fn sbss();
@@ -36,14 +43,33 @@ pub fn clear_bss() {
     (sbss as usize..ebss as usize).for_each(|a| unsafe { (a as *mut u8).write_volatile(0) });
 }
 
-/// the rust entry-point of os
+/// Initialize the bare-metal program, run a calculation, print its layout, and
+/// terminate QEMU successfully. This is the only exercise interface.
+///
+/// The assembly entry has already established a 64 KiB stack. Call clear_bss()
+/// before logging::init(), which must run once. Print `[kernel] Hello, world!`,
+/// then sum the local usize array [1, 2, 3, 4, 5] by traversing its elements and
+/// print `[kernel] sum = 15` using the computed result, not a hard-coded sum.
+///
+/// Preserve the existing log levels: trace! for .text, debug! for .rodata,
+/// info! for .data, warn! for the boot-stack bounds, and error! for .bss, in that
+/// order. Obtain hexadecimal addresses from the linker symbols below; they are
+/// addresses, not callable functions. Keep the logger's LOG filtering, including
+/// disabled logs when LOG is unset. Do not clear the boot stack.
+///
+/// Finish with QEMU_EXIT_HANDLE.exit_success(). The return type `!` forbids
+/// returning to the assembly caller; panic, sbi::shutdown() (failure exit), or
+/// an endless loop are not successful completion. No std or heap is available.
 #[no_mangle]
+#[allow(dead_code, unused_imports)]
 pub fn rust_main() -> ! {
+    use crate::board::QEMUExit;
+
     extern "C" {
         fn stext(); // begin addr of text segment
         fn etext(); // end addr of text segment
         fn srodata(); // start addr of Read-Only data segment
-        fn erodata(); // end addr of Read-Only data ssegment
+        fn erodata(); // end addr of Read-Only data segment
         fn sdata(); // start addr of data segment
         fn edata(); // end addr of data segment
         fn sbss(); // start addr of BSS segment
@@ -51,29 +77,6 @@ pub fn rust_main() -> ! {
         fn boot_stack_lower_bound(); // stack lower bound
         fn boot_stack_top(); // stack top
     }
-    clear_bss();
-    logging::init();
-    println!("[kernel] Hello, world!");
-    trace!(
-        "[kernel] .text [{:#x}, {:#x})",
-        stext as usize,
-        etext as usize
-    );
-    debug!(
-        "[kernel] .rodata [{:#x}, {:#x})",
-        srodata as usize, erodata as usize
-    );
-    info!(
-        "[kernel] .data [{:#x}, {:#x})",
-        sdata as usize, edata as usize
-    );
-    warn!(
-        "[kernel] boot_stack top=bottom={:#x}, lower_bound={:#x}",
-        boot_stack_top as usize, boot_stack_lower_bound as usize
-    );
-    error!("[kernel] .bss [{:#x}, {:#x})", sbss as usize, ebss as usize);
 
-    use crate::board::QEMUExit;
-    crate::board::QEMU_EXIT_HANDLE.exit_success(); // CI autotest success
-                                                   //crate::board::QEMU_EXIT_HANDLE.exit_failure(); // CI autoest failed
+    todo!("ch1 API: implement rust_main")
 }
