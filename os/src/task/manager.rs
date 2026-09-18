@@ -4,6 +4,7 @@
 //! Other CPU process monitoring functions are in Processor.
 
 use super::TaskControlBlock;
+use crate::config::BIG_STRIDE;
 use crate::sync::UPSafeCell;
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::sync::Arc;
@@ -13,7 +14,7 @@ pub struct TaskManager {
     ready_queue: VecDeque<Arc<TaskControlBlock>>,
 }
 
-/// A simple FIFO scheduler.
+/// A stride scheduler over the ready queue.
 impl TaskManager {
     ///Creat an empty TaskManager
     pub fn new() -> Self {
@@ -25,9 +26,20 @@ impl TaskManager {
     pub fn add(&mut self, task: Arc<TaskControlBlock>) {
         self.ready_queue.push_back(task);
     }
-    /// Take a process out of the ready queue
+    /// Select the smallest stride and charge the selected process one step.
     pub fn fetch(&mut self) -> Option<Arc<TaskControlBlock>> {
-        self.ready_queue.pop_front()
+        let index = self
+            .ready_queue
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, task)| task.inner_exclusive_access().stride)?
+            .0;
+        let task = self.ready_queue.remove(index)?;
+        {
+            let mut inner = task.inner_exclusive_access();
+            inner.stride += BIG_STRIDE / inner.prio;
+        }
+        Some(task)
     }
 }
 
@@ -42,7 +54,7 @@ lazy_static! {
 
 /// Add process to ready queue
 pub fn add_task(task: Arc<TaskControlBlock>) {
-	//trace!("kernel: TaskManager::add_task");
+    //trace!("kernel: TaskManager::add_task");
     PID2TCB
         .exclusive_access()
         .insert(task.getpid(), Arc::clone(&task));
@@ -51,7 +63,7 @@ pub fn add_task(task: Arc<TaskControlBlock>) {
 
 /// Take a process out of the ready queue
 pub fn fetch_task() -> Option<Arc<TaskControlBlock>> {
-	//trace!("kernel: TaskManager::fetch_task");
+    //trace!("kernel: TaskManager::fetch_task");
     TASK_MANAGER.exclusive_access().fetch()
 }
 

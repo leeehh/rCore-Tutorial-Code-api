@@ -8,6 +8,9 @@ FS_IMG := ../user/target/$(TARGET)/$(MODE)/fs.img
 APPS := ../user/src/bin/*
 OFFLINE :=
 
+# Avoid intermittent dependency lookup failures with parallel Cargo builds.
+export CARGO_BUILD_JOBS ?= 1
+
 # BOARD
 BOARD := qemu
 SBI ?= rustsbi
