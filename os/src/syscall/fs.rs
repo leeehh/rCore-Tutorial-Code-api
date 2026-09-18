@@ -1,4 +1,12 @@
 //! File and filesystem-related syscalls
+//!
+//! The chapter 7 API exercise replaces only sys_pipe and sys_dup. Other syscalls
+//! are provided, including descriptor/permission checks and user-buffer
+//! translation for read/write. Preserve their behavior and all public signatures.
+
+// Allow imports and parameters used by the two exercise interfaces.
+#![allow(unused_imports, unused_variables)]
+
 use crate::config::PAGE_SIZE;
 use crate::fs::{link_file, make_pipe, open_file, unlink_file, OpenFlags, Stat};
 use crate::mm::{
@@ -81,34 +89,29 @@ pub fn sys_close(fd: usize) -> isize {
     0
 }
 
+/// Create a pipe, install both endpoints, and return 0 (syscall 59).
+///
+/// `pipe` points to two consecutive, aligned, writable usize values in the
+/// current process's address space; address arithmetic and allocations succeed.
+/// Allocate the smallest free descriptor for the read endpoint and occupy it
+/// before allocating the write descriptor. Preserve every existing descriptor.
+/// Write back [read_fd, write_fd] using the current token and provided translation
+/// helpers, not by dereferencing user virtual addresses in the kernel.
+/// Invalid user pointers and allocation-failure rollback are outside the input
+/// contract. No new address-translation or descriptor-management API is needed.
 pub fn sys_pipe(pipe: *mut usize) -> isize {
-    trace!("kernel:pid[{}] sys_pipe", current_task().unwrap().pid.0);
-    let task = current_task().unwrap();
-    let token = current_user_token();
-    let mut inner = task.inner_exclusive_access();
-    let (pipe_read, pipe_write) = make_pipe();
-    let read_fd = inner.alloc_fd();
-    inner.fd_table[read_fd] = Some(pipe_read);
-    let write_fd = inner.alloc_fd();
-    inner.fd_table[write_fd] = Some(pipe_write);
-    *translated_refmut(token, pipe) = read_fd;
-    *translated_refmut(token, unsafe { pipe.add(1) }) = write_fd;
-    0
+    todo!("syscall::sys_pipe")
 }
 
+/// Duplicate a descriptor into the smallest free slot (syscall 24).
+///
+/// Return -1 without changing the table if fd is out of range or closed.
+/// Otherwise clone the existing Arc<dyn File>, install it in the newly allocated
+/// slot, and return that descriptor. Do not create or reopen a file: duplicates
+/// share offsets for ordinary files and extend endpoint lifetimes for pipes.
+/// The original descriptor and all other occupied slots remain unchanged.
 pub fn sys_dup(fd: usize) -> isize {
-    trace!("kernel:pid[{}] sys_dup", current_task().unwrap().pid.0);
-    let task = current_task().unwrap();
-    let mut inner = task.inner_exclusive_access();
-    if fd >= inner.fd_table.len() {
-        return -1;
-    }
-    if inner.fd_table[fd].is_none() {
-        return -1;
-    }
-    let new_fd = inner.alloc_fd();
-    inner.fd_table[new_fd] = Some(Arc::clone(inner.fd_table[fd].as_ref().unwrap()));
-    new_fd as isize
+    todo!("syscall::sys_dup")
 }
 
 /// Get an open file's metadata and copy it into the caller's address space.
