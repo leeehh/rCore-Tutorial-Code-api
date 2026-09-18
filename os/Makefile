@@ -8,6 +8,9 @@ FS_IMG := ../user/target/$(TARGET)/$(MODE)/fs.img
 APPS := ../user/src/bin/*
 OFFLINE :=
 
+# Avoid intermittent dependency lookup failures with parallel Cargo builds.
+export CARGO_BUILD_JOBS ?= 1
+
 # BOARD
 BOARD := qemu
 SBI ?= rustsbi
@@ -25,7 +28,7 @@ KERNEL_ENTRY_PA := 0x80200000
 OBJDUMP := rust-objdump --arch-name=riscv64
 OBJCOPY := rust-objcopy --binary-architecture=riscv64
 
-CHAPTER ?= $(shell git rev-parse --abbrev-ref HEAD | sed -E 's/ch([0-9])/\1/')
+CHAPTER ?= $(shell git rev-parse --abbrev-ref HEAD | sed -E 's/^ch([0-9]+).*$$/\1/')
 TEST ?= $(CHAPTER)
 BASE ?= 1
 
