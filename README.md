@@ -17,23 +17,13 @@
 
 ## 实验过程记录工具
 
-课程过程记录：首次使用时，先切换到 `main` 分支，在仓库根目录运行 `python3 course.py`，先自动初始化 AI 会话归档，再打开实验与实时日志。安装要求、日志位置和 Codex 入口见 [实验过程记录说明](../../blob/main/docs/course-recording.md)。
+课程过程记录：在仓库根目录运行 `python3 course.py`，先自动初始化 AI 会话归档，再打开实验与实时日志。安装要求、日志位置和 Codex 入口见 [实验过程记录说明](https://github.com/leeehh/rCore-Tutorial-Code-api/blob/main/docs/course-recording.md)。
 
-AI过程记录：启动时默认使用 `auto`，安装后可通过 `git course --agent codex` 指定客户端；也支持 `claude`、`cursor`、`vscode`、`copilot` 和 `all`。会话记录保存到 `.ai/agent-sessions/<agent>/`，文件名包含日期时间，格式为 JSONL。`.ai/agent-sessions/`、`.ai/events/` 和 `.ai/submissions/` 的全部内容须随实验代码一起提交。请同学们不要改动或删除这些记录，提交时会检查这些记录作为考核参考。详细说明见 [AI 会话归档说明](../../blob/main/docs/agent-session-archive.md)。
+AI过程记录：启动时默认使用 `auto`，可通过 `python3 course.py --agent codex` 指定客户端；也支持 `claude`、`cursor`、`vscode`、`copilot` 和 `all`。会话记录保存到 `.ai/agent-sessions/<agent>/`，文件名包含日期时间，格式为 JSONL。`.ai/agent-sessions/`、`.ai/events/` 和 `.ai/submissions/` 的全部内容须随实验代码一起提交。请同学们不要改动或删除这些记录，提交时会检查这些记录作为考核参考。详细说明见 [AI 会话归档说明](https://github.com/leeehh/rCore-Tutorial-Code-api/blob/main/docs/agent-session-archive.md)。
 
 **Codex 首次使用需要信任 hooks**：安装完成后，在实验仓库根目录的终端运行 `codex`，进入后输入 `/hooks`，找到 `rcore-session-archive` 的 `Stop` 和 `SessionEnd`，分别审阅并选择 **Trust（信任）**。未信任时不会自动保存会话。使用 VS Code Codex 的同学完成后还需重载窗口并新建会话；更新插件后，如提示 hooks 发生变化，请重新审阅并信任。
 
-记录功能与验证：[实验过程记录工具功能说明](../../blob/main/docs/course-monitor-report.md)。工具只在 `main` 分支分发；安装一次后，切换到本分支仍会记录。实验分支可使用 `git course logs` 查看日志，使用 `git agent-plugins auto` 再次配置 AI 归档。
-
-安装步骤（先提交当前分支的修改和过程日志，再切换分支）：
-
-```bash
-git switch main
-python3 course.py
-# 保持记录工具运行，在另一个终端切回本分支
-git switch ch3
-git course status
-```
+记录功能与验证：[实验过程记录工具功能说明](https://github.com/leeehh/rCore-Tutorial-Code-api/blob/main/docs/course-monitor-report.md)。工具只在 `main` 分支分发；安装一次后，切换到 `ch1`–`ch8` 仍会记录。实验分支可使用 `git course logs` 查看日志，使用 `git agent-plugins auto` 再次配置 AI 归档。
 
 ## 历史文档参考
 
