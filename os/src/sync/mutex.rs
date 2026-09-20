@@ -1,4 +1,13 @@
-//! Mutex (spin-like and blocking(sleep))
+//! Mutexes for the chapter 8 API exercise.
+//!
+//! Keep the provided types, signatures, constructors, and resource accessors.
+//! The four TODOs implement yielding and blocking mutexes, including resource
+//! accounting. Internal helpers may be added within the exercise files.
+//! Release all internal borrows before switching tasks. Blocking unlock hands
+//! ownership directly to the first waiter before making it ready.
+
+// Allow unused items, imports, and parameters in the exercise skeleton.
+#![allow(dead_code, unused_imports, unused_variables)]
 
 use super::{Resource, UPSafeCell};
 use crate::task::TaskControlBlock;
@@ -37,29 +46,23 @@ impl Mutex for MutexSpin {
         &self.resource
     }
 
-    /// Lock the spinlock mutex
+    /// Acquire the mutex, yielding while it is held.
+    ///
+    /// Record the current request with Resource::wait even when detection is
+    /// disabled. On success set locked and account for the current task with
+    /// Resource::acquire exactly once. On contention release the locked borrow,
+    /// suspend_current_and_run_next(), and retry; do not block or busy-wait.
+    /// The syscall performs rejection; this method also serves Condvar::wait.
     fn lock(&self) {
         trace!("kernel: MutexSpin::lock");
-        self.resource.wait();
-        loop {
-            let mut locked = self.locked.exclusive_access();
-            if *locked {
-                drop(locked);
-                suspend_current_and_run_next();
-                continue;
-            } else {
-                *locked = true;
-                self.resource.acquire(&current_task().unwrap());
-                return;
-            }
-        }
+        todo!("sync::MutexSpin::lock")
     }
 
+    /// Release one accounted unit from the current task and clear locked.
+    /// The caller holds the mutex. There is no blocking wait queue to wake.
     fn unlock(&self) {
         trace!("kernel: MutexSpin::unlock");
-        let mut locked = self.locked.exclusive_access();
-        self.resource.release();
-        *locked = false;
+        todo!("sync::MutexSpin::unlock")
     }
 }
 
@@ -69,6 +72,7 @@ pub struct MutexBlocking {
     resource: Resource,
 }
 
+/// Lock state and FIFO of blocked tasks awaiting ownership.
 pub struct MutexBlockingInner {
     locked: bool,
     wait_queue: VecDeque<Arc<TaskControlBlock>>,
@@ -95,32 +99,24 @@ impl Mutex for MutexBlocking {
         &self.resource
     }
 
-    /// lock the blocking mutex
+    /// Acquire the mutex or enqueue the current task and block.
+    ///
+    /// Record Resource::wait first. If free, set locked and acquire the resource
+    /// for the current task. Otherwise enqueue it once at the back, release the
+    /// inner borrow, and block_current_and_run_next(). On resumption unlock has
+    /// already assigned ownership; do not acquire or enqueue a second time.
     fn lock(&self) {
         trace!("kernel: MutexBlocking::lock");
-        self.resource.wait();
-        let mut mutex_inner = self.inner.exclusive_access();
-        if mutex_inner.locked {
-            mutex_inner.wait_queue.push_back(current_task().unwrap());
-            drop(mutex_inner);
-            block_current_and_run_next();
-        } else {
-            mutex_inner.locked = true;
-            self.resource.acquire(&current_task().unwrap());
-        }
+        todo!("sync::MutexBlocking::lock")
     }
 
-    /// unlock the blocking mutex
+    /// Release the held mutex, handing it to the first waiter if present.
+    ///
+    /// Require locked, then release the current task's resource accounting.
+    /// With a waiter, assign its resource before wakeup_task and keep locked
+    /// true. Only an empty queue permits clearing locked. Wake at most one task.
     fn unlock(&self) {
         trace!("kernel: MutexBlocking::unlock");
-        let mut mutex_inner = self.inner.exclusive_access();
-        assert!(mutex_inner.locked);
-        self.resource.release();
-        if let Some(waking_task) = mutex_inner.wait_queue.pop_front() {
-            self.resource.acquire(&waking_task);
-            wakeup_task(waking_task);
-        } else {
-            mutex_inner.locked = false;
-        }
+        todo!("sync::MutexBlocking::unlock")
     }
 }

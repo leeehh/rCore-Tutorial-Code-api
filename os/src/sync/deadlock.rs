@@ -1,4 +1,9 @@
-//! Resource accounting shared by mutex and semaphore deadlock detection.
+//! Deadlock detection for the chapter 8 API exercise.
+//!
+//! Implement the single is_safe TODO. Keep the provided resource accounting,
+//! request rollback, resource registration, and thread cleanup helpers intact.
+//! Each process has separate mutex and semaphore detectors. This model tracks
+//! one pending unit per task, not maximum future demand or mixed-resource cycles.
 
 use super::UPSafeCell;
 use crate::task::{current_task, TaskControlBlock};
@@ -9,31 +14,27 @@ use alloc::{sync::Arc, vec, vec::Vec};
 pub struct DeadlockDetector {
     /// Whether to reject unsafe requests.
     pub enabled: bool,
+    /// Currently available units, indexed by resource ID.
     available: Vec<usize>,
+    /// Units held by each task: allocation[tid][resource_id].
     allocation: Vec<Vec<usize>>,
+    /// One pending resource unit per task, or None if it is not waiting.
     need: Vec<Option<usize>>,
 }
 
 impl DeadlockDetector {
-    /// Check whether all threads can finish.
+    /// Check whether all recorded tasks can finish under their current requests.
+    ///
+    /// Simulate with a copy of available and initially unfinished tasks. A task
+    /// can finish if it has no pending request or its requested resource has a
+    /// positive simulated count. Finishing returns its existing allocation to
+    /// the simulated pool once. The requested unit's acquisition and return
+    /// cancel; do not subtract it permanently or release it a second time.
+    /// Repeat until no progress remains, then return whether all tasks finished.
+    /// Empty state is safe. Do not mutate accounting, schedule tasks, or bypass
+    /// this check based on enabled; callers decide when to enforce the result.
     pub fn is_safe(&self) -> bool {
-        let mut work = self.available.clone();
-        let mut finish = vec![false; self.need.len()];
-        loop {
-            let mut progress = false;
-            for (tid, done) in finish.iter_mut().enumerate() {
-                if !*done && self.need[tid].map_or(true, |id| work[id] > 0) {
-                    for (free, held) in work.iter_mut().zip(&self.allocation[tid]) {
-                        *free += held;
-                    }
-                    *done = true;
-                    progress = true;
-                }
-            }
-            if !progress {
-                return finish.iter().all(|done| *done);
-            }
-        }
+        todo!("sync::DeadlockDetector::is_safe")
     }
 
     fn ensure_thread(&mut self, tid: usize) {
