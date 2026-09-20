@@ -34,7 +34,33 @@ impl DeadlockDetector {
     /// Empty state is safe. Do not mutate accounting, schedule tasks, or bypass
     /// this check based on enabled; callers decide when to enforce the result.
     pub fn is_safe(&self) -> bool {
-        todo!("sync::DeadlockDetector::is_safe")
+        let mut work = self.available.clone();
+        let mut finished = vec![false; self.need.len()];
+        let mut remaining = self.need.len();
+        while remaining > 0 {
+            let mut progressed = false;
+            for (tid, done) in finished.iter_mut().enumerate() {
+                if *done {
+                    continue;
+                }
+                if let Some(id) = self.need[tid] {
+                    if work[id] == 0 {
+                        continue;
+                    }
+                }
+                // Acquiring and returning the pending unit cancel out.
+                for (available, held) in work.iter_mut().zip(&self.allocation[tid]) {
+                    *available += *held;
+                }
+                *done = true;
+                remaining -= 1;
+                progressed = true;
+            }
+            if !progressed {
+                return false;
+            }
+        }
+        true
     }
 
     fn ensure_thread(&mut self, tid: usize) {

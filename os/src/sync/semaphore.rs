@@ -51,7 +51,15 @@ impl Semaphore {
     /// not previously call down(); do not add an ownership requirement.
     pub fn up(&self) {
         trace!("kernel: Semaphore::up");
-        todo!("sync::Semaphore::up")
+        self.resource.release();
+        let mut inner = self.inner.exclusive_access();
+        inner.count += 1;
+        if inner.count <= 0 {
+            let task = inner.wait_queue.pop_front().unwrap();
+            self.resource.acquire(&task);
+            drop(inner);
+            wakeup_task(task);
+        }
     }
 
     /// Acquire one permit, returning false only if Resource::request rejects it.
@@ -64,6 +72,20 @@ impl Semaphore {
     /// the syscall wrapper translates rejection into -0xDEAD.
     pub fn down(&self) -> bool {
         trace!("kernel: Semaphore::down");
-        todo!("sync::Semaphore::down")
+        if !self.resource.request() {
+            return false;
+        }
+        let mut inner = self.inner.exclusive_access();
+        inner.count -= 1;
+        let task = current_task().unwrap();
+        if inner.count >= 0 {
+            self.resource.acquire(&task);
+        } else {
+            inner.wait_queue.push_back(task);
+            drop(inner);
+            block_current_and_run_next();
+            // up() has already assigned the permit to this task.
+        }
+        true
     }
 }

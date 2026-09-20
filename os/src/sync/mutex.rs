@@ -55,14 +55,25 @@ impl Mutex for MutexSpin {
     /// The syscall performs rejection; this method also serves Condvar::wait.
     fn lock(&self) {
         trace!("kernel: MutexSpin::lock");
-        todo!("sync::MutexSpin::lock")
+        self.resource.wait();
+        loop {
+            let mut locked = self.locked.exclusive_access();
+            if !*locked {
+                *locked = true;
+                self.resource.acquire(&current_task().unwrap());
+                return;
+            }
+            drop(locked);
+            suspend_current_and_run_next();
+        }
     }
 
     /// Release one accounted unit from the current task and clear locked.
     /// The caller holds the mutex. There is no blocking wait queue to wake.
     fn unlock(&self) {
         trace!("kernel: MutexSpin::unlock");
-        todo!("sync::MutexSpin::unlock")
+        self.resource.release();
+        *self.locked.exclusive_access() = false;
     }
 }
 
@@ -107,7 +118,18 @@ impl Mutex for MutexBlocking {
     /// already assigned ownership; do not acquire or enqueue a second time.
     fn lock(&self) {
         trace!("kernel: MutexBlocking::lock");
-        todo!("sync::MutexBlocking::lock")
+        self.resource.wait();
+        let mut inner = self.inner.exclusive_access();
+        let task = current_task().unwrap();
+        if !inner.locked {
+            inner.locked = true;
+            self.resource.acquire(&task);
+        } else {
+            inner.wait_queue.push_back(task);
+            drop(inner);
+            block_current_and_run_next();
+            // unlock() has already transferred ownership to this task.
+        }
     }
 
     /// Release the held mutex, handing it to the first waiter if present.
@@ -117,6 +139,15 @@ impl Mutex for MutexBlocking {
     /// true. Only an empty queue permits clearing locked. Wake at most one task.
     fn unlock(&self) {
         trace!("kernel: MutexBlocking::unlock");
-        todo!("sync::MutexBlocking::unlock")
+        let mut inner = self.inner.exclusive_access();
+        assert!(inner.locked);
+        self.resource.release();
+        if let Some(task) = inner.wait_queue.pop_front() {
+            self.resource.acquire(&task);
+            drop(inner);
+            wakeup_task(task);
+        } else {
+            inner.locked = false;
+        }
     }
 }
