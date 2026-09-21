@@ -1,6 +1,6 @@
 # rCore ch8：源代码分析与 GDB 动态跟踪
 
-阅读 `ch8` 的参考实现，分析线程同步、资源交接及当前请求的安全性判断。
+阅读 `ch8` 的参考实现，分析互斥锁、信号量、条件变量与线程等待、唤醒的关系。
 
 ## 1. 使用说明
 
@@ -12,13 +12,15 @@ make build MODE=debug BASE=2
 
 内核使用 `MODE=debug`，用户程序与文件系统镜像保持 release 构建。debug 内核使用较大的栈，容纳未优化的进程创建调用；日常运行和实验验收继续使用原有命令。
 
+本节保持死锁检测默认关闭，不调用 `sys_enable_deadlock_detect(1)`，不要求跟踪 `Resource` 或 `DeadlockDetector::is_safe`。
+
 先按下表阅读源码：
 
 | 阅读位置 | 关注内容 |
 | --- | --- |
 | [sync/mutex.rs](os/src/sync/mutex.rs)、[semaphore.rs](os/src/sync/semaphore.rs)、[condvar.rs](os/src/sync/condvar.rs) | 让出与阻塞、FIFO 交接、条件等待后重新持锁。 |
-| [sync/deadlock.rs](os/src/sync/deadlock.rs)、[syscall/sync.rs](os/src/syscall/sync.rs) | 请求登记、安全性模拟、拒绝与返回值转换。 |
-| [task/mod.rs](os/src/task/mod.rs)、[manager.rs](os/src/task/manager.rs)、[process.rs](os/src/task/process.rs) | 线程状态、唤醒、同步对象表和两个独立检测器。 |
+| [syscall/sync.rs](os/src/syscall/sync.rs) | 同步对象的创建、参数传递和操作入口。 |
+| [task/mod.rs](os/src/task/mod.rs)、[manager.rs](os/src/task/manager.rs)、[process.rs](os/src/task/process.rs) | 线程状态、唤醒、就绪队列和同步对象表。 |
 
 ## 2. 操作样例
 
@@ -58,37 +60,37 @@ info args
 p mutex_id
 ```
 
-运行到 QEMU shell 后输入 `ch8_deadlock_mutex1`，观察同一线程两次请求同一把阻塞锁。`mutex_id` 是当前进程对象表的索引。对照源码区分 `Resource::request` 和 `mutex.lock`；拒绝后返回 `-0xDEAD`，不能继续阻塞或获取资源。
+运行到 QEMU shell 后输入 `ch8b_test_condvar`，观察线程获取互斥锁的入口。`mutex_id` 是当前进程对象表的索引。对照源码说明如何找到锁对象，以及条件等待为什么需要先释放锁、返回前重新获取锁。
 
-### 观察安全性判断
+### 观察信号量
 
 ```gdb
-tbreak 'os::sync::deadlock::DeadlockDetector::is_safe'
+tbreak 'os::sync::semaphore::Semaphore::down'
 continue
 bt 6
-p *self
+p self->inner
 ```
 
-继续同一测例，观察 `enabled`、`available`、`allocation`、`need`，再结合源码解释临时 `work` 与 `finish`。向量可能只显示长度和指针，应按实际可见内容记录。要比较重复加锁，可再次设置同名临时断点后继续；注意区分启用检测时的空状态检查和请求检查。
+设置断点并继续后，等待前一个程序完成，在 QEMU shell 输入 `ch8b_sync_sem`。观察信号量计数和等待队列，结合 `next` 与源码说明计数递减、线程入队和阻塞的条件，以及 `up` 如何唤醒等待者。队列可能只显示长度和指针，应按实际可见内容记录。
 
-若函数名未解析，用 `info functions is_safe` 查询符号。局部变量须初始化后再观察；`is_safe` 不修改真实分配，撤销拒绝请求由 `Resource::request` 完成。单个互斥测例不代表动态覆盖了所有同步原语。
+若函数名未解析，用 `info functions Semaphore::down` 查询符号。局部变量须初始化后再观察；遇到配套记账调用可用 `next` 跳过。调试暂停可能改变线程交错顺序，应区分实际观察与源码推导。
 
 ## 3. 需要追踪的调用链
 
 | 调用链 | 需要解释的状态变化 |
 | --- | --- |
-| `sys_mutex_lock` → `Resource::request` → `is_safe` → `Mutex::lock` | 请求登记、检查、获取或等待。 |
+| `sys_mutex_lock` → `Mutex::lock` | 根据对象编号取得锁，获取成功或进入等待。 |
 | `MutexSpin::lock` → `suspend_current_and_run_next`；`MutexBlocking::lock` → `block_current_and_run_next` | `Ready` 重试与 FIFO 排队进入 `Blocked` 的区别。 |
-| `MutexBlocking::unlock` → `Resource::release/acquire` → `wakeup_task` | 先把资源交给队首再唤醒，锁仍被占用。 |
-| `Semaphore::down` / `up` → 请求、计数、入队或资源交付 | 负计数表示等待者，可用资源非负，恢复后不重复记账。 |
+| `MutexBlocking::unlock` → `wakeup_task` | 唤醒队首等待者时，锁仍被占用。 |
+| `Semaphore::down` / `up` → 计数变化、入队阻塞或唤醒 | 计数与等待线程数量的关系，许可不足时的等待与恢复。 |
 | `Condvar::wait` → 解锁、入队、阻塞、重新加锁；`signal` → `wakeup_task` | 通知不积累、不自动交锁，等待返回前重新持锁。 |
 
-分析关闭检测仍需记账、每线程只有一项单位请求、两类资源分别检测的边界。条件变量不入资源图，线程清理记录不自动归还资源；重获锁不增加第二次拒绝检查。参考实现与 API 核心语义一致，不改变锁接口或扩展检测范围。
+重点比较让出 CPU、阻塞和唤醒的区别，说明为什么切换前要释放内部借用，以及条件变量的等待为什么需要与互斥锁配合。上述调用链省略配套记账过程。
 
 ## 4. 报告要求
 
-报告保存到 `reports/lab8.md`，保留对应 GDB 日志。结合线程状态、资源交接和安全性模拟解释上述功能，可附必要代码片段或源码链接。
+报告保存到 `reports/lab8.md`，保留对应 GDB 日志。结合锁状态、信号量计数、等待队列和线程状态解释上述功能，可附必要代码片段或源码链接。
 
-若选择本章独立实现，比较自己的同步实现与参考实现，说明等待、唤醒、借用释放和请求拒绝处理的差异，保持 API 的资源模型及单核假设。
+若选择本章独立实现，比较自己的同步实现与参考实现，说明等待、唤醒、借用释放和条件等待后重新持锁的处理，遵守 API 文档的接口契约。
 
 总结主要问题、排查依据和解决思路，区分实际观察与源码推导。GDB 跟踪用于分析，功能验收继续使用 API 文档原有命令。
