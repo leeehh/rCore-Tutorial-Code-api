@@ -4,6 +4,8 @@
 
 当前分支 `ch4-api` 用于第 4 章的独立实现。请按 [ch4 API 实验文档](./rcore-ch4-api.md) 实现页表与地址空间管理模块并在实验报告中分析你的实现与`ch4`参考实现的区别，请在本分支直接提交代码、说明文档及过程日志。
 
+参考实现的阅读与调试见 [ch4 源代码分析与动态跟踪文档](../../blob/ch4/rcore-ch4-analyze.md)。
+
 ## 实验要求
 
 从 [rCore 实验任务书](https://LearningOS.github.io/rCore-Tutorial-Guide/)的共 8 章中选择 5 章，完成以下任务：
