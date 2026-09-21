@@ -4,6 +4,8 @@
 
 当前分支 `ch7-api` 用于第 7 章的独立实现。请按 [ch7 API 实验文档](./rcore-ch7-api.md) 实现管道通信模块并在实验报告中分析你的实现与`ch7`参考实现的区别，请在本分支直接提交代码、说明文档及过程日志。
 
+参考实现的阅读与调试见 [ch7 源代码分析与动态跟踪文档](../../blob/ch7/rcore-ch7-analyze.md)。
+
 ## 实验要求
 
 从 [rCore 实验任务书](https://LearningOS.github.io/rCore-Tutorial-Guide/)的共 8 章中选择 5 章，完成以下任务：
