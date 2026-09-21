@@ -17,6 +17,18 @@
 
 本文沿用前两章 API 实验按模块和接口组织 `description`、签名、输入、输出与关键约束的形式。以下契约以本分支代码为准。页表、地址空间和系统调用适配已提供，本实验不要求维护 `sys_trace`。
 
+## 实验要求
+
+1. **代码修改范围**：仅允许修改 `ch5-api` 分支中 [os/src/task/task.rs](os/src/task/task.rs) 的 `TaskControlBlock::new/fork/exec/spawn/waitpid/set_priority`、[os/src/task/manager.rs](os/src/task/manager.rs) 的 `TaskManager::fetch`、[os/src/task/processor.rs](os/src/task/processor.rs) 的 `run_tasks/schedule`，以及 [os/src/task/mod.rs](os/src/task/mod.rs) 的 `suspend_current_and_run_next/exit_current_and_run_next`，共十一处 TODO；内部辅助函数可在这四个文件中设计。保留已有类型、接口和配套实现，不修改其他代码文件、构建配置或测试文件；可以新增实验报告等说明文档。
+
+2. **静态分析与动态跟踪**：阅读 `ch5` 分支中进程管理与调度的参考实现，使用 GDB 跟踪进程复制及调度等关键路径，说明地址空间、父子关系、进程状态、上下文和 stride 如何变化。操作参考 [ch5 源代码分析与动态跟踪文档](../../blob/ch5/rcore-ch5-analyze.md)。报告应记录实际断点、GDB 命令、观察结果和分析结论，可附必要代码片段或源码链接。参考分支的等待回收和优先级逻辑位于 syscall 中，API 已拆到 TCB 接口；参考 `exec` 未重置堆边界，API 明确要求重置，也应分析这一区别。
+
+3. **独立实现与对比**：依据本文契约独立完成十一处接口，并按“运行与验收”小节执行验收。在报告中对比自己的实现与 `ch5` 参考实现的功能、状态转换、资源生命周期和调度方法，说明实现选择及原因；不能只罗列代码文本差异。
+
+4. **主要问题与解决思路**：总结主要问题的现象、原因、排查过程、解决思路及处理结果，结合代码位置、GDB 记录或运行输出说明依据。特别关注动态借用、上下文指针生命周期及退出与回收的分工；未解决的问题如实记录。
+
+实验报告采用 Markdown 格式，保存到仓库根目录的 `reports/lab5.md`，至少包含静态分析与动态跟踪、独立实现对比、主要问题与解决思路三部分，并随实验代码提交。参考实现上的 GDB 跟踪用于分析，完成后的功能验收仍使用本文规定的命令和既有测例。
+
 ## 提供的数据结构
 
 ### TaskStatus
@@ -410,7 +422,7 @@ make run BASE=2
 ch5_usertest
 ```
 
-验收只使用这一已有测试入口，不新增测试。实现完成后，内核应启动到用户终端，并完成 `ch5_usertest` 中的应用启动、等待回收、优先级和 stride 检查。
+功能验收只使用这一已有测试入口，不新增测试。实现完成后，内核应启动到用户终端，并完成 `ch5_usertest` 中的应用启动、等待回收、优先级和 stride 检查。
 
 结果以各子测例的实际输出、原有断言和退出码为准：`ch4_mmap1`、`ch4_mmap2` 因预期访问异常退出，退出码应为 `-2`；其余子测例应成功退出，退出码为 `0`。进程创建应返回有效 PID，等待返回的 PID 应与目标子进程一致。现有总测例的最终 `ch5 Usertests passed!` 标语不能替代这些子测例结果。
 
