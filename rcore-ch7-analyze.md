@@ -70,19 +70,23 @@ p byte
 p *self
 ```
 
-在同一测例中继续，观察 `head`、`tail`、`status`，结合 `next` 查看一次写入后的变化。临时断点只停一次；若当前未到回绕或满状态，相关结论应标为源码分析。已有 `ch7b_pipe_large_test` 可帮助理解超过容量的分批传输，但不要求固定并发顺序。
+在同一测例中继续，观察 `head`、`tail`、`status`，结合 `next` 查看一次写入后的变化。临时断点记录一次写入；再结合 `ch7b_pipe_large_test` 分析超过容量时的分批传输与读写等待。
 
-若函数名未解析，用 `info functions write_byte` 查询符号。不要以 GDB 当前的地址转换代替用户页表转换；优先读取 syscall 中已有的内核变量。
+对下表各路径结合源码说明，并使用对应程序观察。描述符结果从 syscall 的内核变量取得，再对照已有用户地址转换过程。
 
 ## 3. 需要追踪的调用链
 
-| 调用链 | 需要解释的状态变化 |
-| --- | --- |
-| `sys_pipe` → `make_pipe` → `PipeRingBuffer::new/set_write_end` | 两端共享缓冲区、写端弱引用、两个描述符。 |
-| `sys_write` → `Pipe::write` → `available_write/write_byte` | FIFO 写入、满时释放借用并让出 CPU。 |
-| `sys_read` → `Pipe::read` → `available_read/read_byte` | 消费数据、暂时无数据时等待、写端关闭后的短读。 |
-| `sys_dup` 或 `fork` 克隆文件对象的 `Arc` | 共享端点和缓冲区，不复制已有数据。 |
-| `sys_close` 或退出释放描述符引用 → `all_write_ends_closed` | 最后写端强引用消失，残留数据读完后才出现 EOF。 |
+| 调用链或事件关系 | 触发程序或 shell 命令 | 需要解释的状态变化 |
+| --- | --- | --- |
+| `sys_pipe` → `make_pipe` → `PipeRingBuffer::new/set_write_end` | `ch7b_pipetest` | 两端共享缓冲区、写端弱引用、两个描述符。 |
+| `sys_write` → `Pipe::write` → `available_write/write_byte` | `ch7b_pipetest`；`ch7b_pipe_large_test` | FIFO 写入，满时释放借用并让出 CPU。 |
+| `sys_read` → `Pipe::read` → `available_read/read_byte` | `ch7b_pipetest`；`ch7b_pipe_large_test` | 消费数据、暂时无数据时等待、写端关闭后的短读。 |
+| `fork` 克隆文件描述符中的管道端点 `Arc` | `ch7b_pipetest` 创建管道后 fork | 父子进程共享端点和缓冲区。 |
+| `sys_dup` 克隆已有打开对象 `Arc` | `ch2b_hello_world > audit7`；随后 `ch7b_cat audit7` | shell 关闭描述符 1 后复制输出文件描述符，得到 1 并共享同一打开对象。 |
+| `sys_close` 释放写端引用；后续 `Pipe::read` → `all_write_ends_closed` | `ch7b_pipetest` | 父子都关闭写端，读完残留数据后以 13 字节短读返回。 |
+| 退出路径清空文件描述符表 | 上述程序退出 | 释放进程持有的文件对象引用。 |
+
+关闭端点和查询 EOF 是先后发生的事件：`sys_close` 改变引用计数，之后由读取路径检查写端是否全部关闭，不是 `sys_close` 直接调用关闭查询。
 
 解释 `head == tail` 为什么需结合状态区分空满，以及 `dup`、父子进程和 syscall 临时引用如何延长写端寿命。参考 `ch7` 的零长度读写可能先进入空满等待分支，API 契约要求立即返回 `0`；应明确此差异，不能直接沿用参考实现的边界行为。
 
