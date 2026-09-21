@@ -10,7 +10,7 @@
 make build MODE=debug BASE=2
 ```
 
-本节使用 `MODE=debug`；日常运行和实验验收继续使用原有命令。
+本节使用 `MODE=debug`，调试内核的进程内核栈为 64 KiB；日常运行和实验验收继续使用原有命令，release 内核栈仍为 8 KiB。
 
 先按下表阅读源码：
 
@@ -48,6 +48,17 @@ set logging enabled on
 target remote localhost:1234
 ```
 
+### 观察进程复制
+
+```gdb
+tbreak os::syscall::process::sys_fork
+continue
+bt 6
+info registers pc sp
+```
+
+启动用户 shell 时即可命中。结合 `list`、`next` 观察 `current_task`、`new_task`、`new_pid` 的建立，区分地址空间复制、父子关系登记、子进程 `a0 = 0` 和入队由谁完成。用户返回现场位于 TrapContext，不能把内核调用栈当成用户程序调用栈。
+
 ### 观察调度选择
 
 ```gdb
@@ -59,36 +70,30 @@ next
 info locals
 ```
 
-在启动阶段记录一次调度：继续执行到 `inner` 初始化之后，观察选中的 `index`、进程的 `stride` 和 `prio`，并比较累加前后的 stride。通过源码阅读说明最小 stride 的选择规则，以及优先级怎样决定 `BIG_STRIDE / prio`。
+对照源码追踪就绪队列与选中的 `index`；继续执行到 `inner` 初始化之后，再观察被选进程的 `stride`、`prio`。选择依据是累加前的 stride，选中后增加 `BIG_STRIDE / prio`。在局部变量初始化后记录 `index`，并比较一次调度前后的 stride。
 
-### 观察进程复制
-
-```gdb
-tbreak os::syscall::process::sys_fork
-continue
-bt 6
-info registers pc sp
-```
-
-初始进程第一次调用 `fork` 时即可命中。结合 `list`、`next` 观察 `current_task`、`new_task`、`new_pid` 的建立，区分地址空间复制、父子关系登记、子进程 `a0 = 0` 和入队由谁完成。用户返回现场位于 TrapContext，不能把内核调用栈当成用户程序调用栈。
-
-动态跟踪限于启动阶段的进程创建、第一次 fork 和调度选择。完成这些观察后结束调试，其余进程生命周期通过源码分析。
+对各项功能结合下表梳理源码调用关系；两个操作样例记录进程复制和调度的关键现场，表中程序可用于观察相应路径。
 
 ## 3. 需要追踪的调用链
 
-| 调用链 | 触发时机 | 需要记录的状态 |
+| 调用链或控制流程 | 触发程序 | 需要解释的状态变化 |
 | --- | --- | --- |
 | `add_initproc` → `INITPROC` 延迟初始化 → `TaskControlBlock::new`，随后 `add_task` | 内核启动 | 独立 PID、内核栈、地址空间、初始 TrapContext 与 `Ready` 状态。 |
-| `sys_fork` → `TaskControlBlock::fork`，随后 syscall 设置子进程返回值并 `add_task` | `ch5b_initproc` 第一次 fork | 用户空间深拷贝、父子关系、子进程内核栈和 `a0=0`。 |
-| `run_tasks` → `fetch_task` → `TaskManager::fetch` | 启动阶段的一次调度 | 被选进程的编号、优先级及 stride 累加前后的值。 |
+| `sys_fork` → `TaskControlBlock::fork`，随后 syscall 设置子进程返回值并 `add_task` | 启动的 `ch5b_initproc`；`ch5b_forktest_simple` | 用户空间深拷贝、父子关系、子进程内核栈和 `a0=0`。 |
+| `sys_exec` → `TaskControlBlock::exec` | initproc 启动 shell；shell 执行任一程序 | PID 保持，用户程序、页表和入口替换。 |
+| `sys_spawn` → `TaskControlBlock::spawn` → `new`，随后 `add_task` | `ch5_spawn1` | 直接从 ELF 创建子进程并登记父子关系。 |
+| `run_tasks` → `fetch_task` → `TaskManager::fetch` | 启动；`ch5_stride` | 选择最小 stride，按优先级累加整数步长。 |
+| `sys_yield` → `suspend_current_and_run_next` → `schedule` → `__switch` | `ch5b_exit` 中的显式 yield | 进程设为 `Ready` 并入队，保存当前现场、恢复 idle 上下文。 |
+| `exit_current_and_run_next`；父进程随后执行 `sys_waitpid` | `ch5_spawn1`；`ch5b_exit` | `Zombie`、退出码、用户数据页释放和成功等待后的回收。 |
+| 退出进程的 children 移交 `INITPROC` | `ch5b_forktree` | 子进程 parent 更新、INITPROC 接管和后续等待。 |
 
-通过源码阅读分析 `exec` 替换地址空间、`spawn` 创建子进程、主动让出与 idle 上下文恢复，以及退出、孤儿移交和 `waitpid` 回收的调用关系，说明各阶段的状态与资源归属。`__switch` 恢复 idle 保存的现场后，`run_tasks` 从原有切换位置继续执行。
+`__switch` 恢复 idle 保存的现场，`run_tasks` 从原有切换位置继续执行；这一步是上下文恢复，不是 `__switch` 对 `run_tasks` 的普通函数调用。分别在切换两侧记录调用栈与栈指针。
 
 参考分支将等待回收和优先级逻辑写在 `sys_waitpid`、`sys_set_priority` 中，API 已拆为 `TaskControlBlock::waitpid`、`set_priority`。参考 `exec` 没有更新堆边界，API 要求重置 `heap_bottom`、`program_brk`，应按契约实现。分析还需说明退出路径为何主动释放局部 `Arc`，以及 `TaskContext` 与 TrapContext 的不同用途。
 
 ## 4. 报告要求
 
-报告保存到 `reports/lab5.md`，保留启动阶段的 GDB 日志。结合实际记录解释进程创建、第一次 fork 和一次调度；通过源码分析说明其余生命周期与调度规则，可附必要代码片段或源码链接。
+报告保存到 `reports/lab5.md`，保留对应 GDB 日志。结合进程身份、父子关系、上下文和调度字段解释上述功能，可附必要代码片段或源码链接。
 
 若选择本章独立实现，比较自己的进程生命周期和调度实现与参考实现，说明 TCB 接口拆分、资源归属和实现方式不同的原因，遵守 API 指定范围。
 
