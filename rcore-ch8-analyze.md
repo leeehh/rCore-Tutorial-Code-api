@@ -71,21 +71,22 @@ bt 6
 p self->inner
 ```
 
-设置断点并继续后，等待前一个程序完成，在 QEMU shell 输入 `ch8b_sync_sem`。观察信号量计数和等待队列，结合 `next` 与源码说明计数递减、线程入队和阻塞的条件，以及 `up` 如何唤醒等待者。队列可能只显示长度和指针，应按实际可见内容记录。
+设置断点并继续后，等待前一个程序完成，在 QEMU shell 输入 `ch8b_sync_sem`。观察信号量计数和等待队列，结合 `next` 与源码说明计数递减、线程入队和阻塞的条件，以及 `up` 如何唤醒等待者。记录计数及队列信息，并对照本次调用所在的同步分支。
 
-若函数名未解析，用 `info functions Semaphore::down` 查询符号。局部变量须初始化后再观察；遇到配套记账调用可用 `next` 跳过。调试暂停可能改变线程交错顺序，应区分实际观察与源码推导。
+在局部变量初始化后观察，配套记账调用用 `next` 越过。下表给出其他同步路径的既有程序，结合源码说明各条调用关系，并记录操作样例中的关键状态。
 
 ## 3. 需要追踪的调用链
 
-| 调用链 | 需要解释的状态变化 |
-| --- | --- |
-| `sys_mutex_lock` → `Mutex::lock` | 根据对象编号取得锁，获取成功或进入等待。 |
-| `MutexSpin::lock` → `suspend_current_and_run_next`；`MutexBlocking::lock` → `block_current_and_run_next` | `Ready` 重试与 FIFO 排队进入 `Blocked` 的区别。 |
-| `MutexBlocking::unlock` → `wakeup_task` | 唤醒队首等待者时，锁仍被占用。 |
-| `Semaphore::down` / `up` → 计数变化、入队阻塞或唤醒 | 计数与等待线程数量的关系，许可不足时的等待与恢复。 |
-| `Condvar::wait` → 解锁、入队、阻塞、重新加锁；`signal` → `wakeup_task` | 通知不积累、不自动交锁，等待返回前重新持锁。 |
+| 调用链 | 触发程序 | 需要解释的状态变化 |
+| --- | --- | --- |
+| `sys_mutex_lock` → `Mutex::lock` | `ch8b_test_condvar` | 根据对象编号取得锁，获取成功或进入等待。 |
+| `MutexSpin::lock` → `suspend_current_and_run_next` | `ch8b_race_adder_mutex_spin` | 锁被占用时进入 `Ready` 队列，恢复后重试。 |
+| `MutexBlocking::lock` → `block_current_and_run_next` | `ch8b_phil_din_mutex` | FIFO 入队、线程设为 `Blocked`，等待持有者解锁。 |
+| `MutexBlocking::unlock` → `wakeup_task` | `ch8b_phil_din_mutex` | 有等待者时交接给队首，锁保持占用，等待者变为 `Ready`。 |
+| `Semaphore::down/up` → 入队阻塞或 `wakeup_task` | `ch8b_sync_sem` | 计数与等待线程数量的关系，许可不足时等待、up后恢复。 |
+| `Condvar::wait` → 解锁、入队、阻塞、重新加锁；`signal` → `wakeup_task` | `ch8b_test_condvar` | 条件不满足时等待，通知后重新持锁再返回。 |
 
-重点比较让出 CPU、阻塞和唤醒的区别，说明为什么切换前要释放内部借用，以及条件变量的等待为什么需要与互斥锁配合。上述调用链省略配套记账过程。
+重点比较让出 CPU、阻塞和唤醒的区别，说明为什么切换前要释放内部借用，以及条件变量的等待为什么需要与互斥锁配合。在同步原语内的等待、唤醒调用处结合调用栈识别当前路径；`sleep_blocking` 另由定时器唤醒。上述调用链省略配套记账过程。
 
 ## 4. 报告要求
 
