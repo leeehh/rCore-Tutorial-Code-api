@@ -10,7 +10,7 @@
 make build MODE=debug BASE=2
 ```
 
-本节使用 `MODE=debug`；日常运行和实验验收继续使用原有命令。
+本节使用 `MODE=debug`，调试内核的进程内核栈为 64 KiB；日常运行和实验验收继续使用原有命令，release 内核栈仍为 8 KiB。
 
 先按下表阅读源码：
 
@@ -70,19 +70,24 @@ next
 info locals
 ```
 
-对照源码追踪就绪队列与选中的 `index`；继续执行到 `inner` 初始化之后，再观察被选进程的 `stride`、`prio`。选择依据是累加前的 stride，选中后增加 `BIG_STRIDE / prio`。入口处参数可能尚未稳定，不能直接据此解释队列内容；一次命中不能证明长期调度比例。
+对照源码追踪就绪队列与选中的 `index`；继续执行到 `inner` 初始化之后，再观察被选进程的 `stride`、`prio`。选择依据是累加前的 stride，选中后增加 `BIG_STRIDE / prio`。在局部变量初始化后记录 `index`，并比较一次调度前后的 stride。
 
-若函数名未解析，使用 `info functions fetch` 查询完整名称；不可见变量应记录原因，不填入推测值。
+对各项功能结合下表梳理源码调用关系；两个操作样例记录进程复制和调度的关键现场，表中程序可用于观察相应路径。
 
 ## 3. 需要追踪的调用链
 
-| 调用链 | 需要解释的状态变化 |
-| --- | --- |
-| `add_initproc` → `TaskControlBlock::new` → `add_task` | 独立 PID、内核栈、地址空间、初始 TrapContext 与 `Ready` 状态。 |
-| `sys_fork` → `TaskControlBlock::fork` → `add_task` | 用户空间深拷贝、父子关系、子进程内核栈和返回值。 |
-| `sys_exec` → `TaskControlBlock::exec`；`sys_spawn` → `spawn` → `new` | 替换现有进程与直接创建子进程的区别。 |
-| `suspend_current_and_run_next` → `schedule` → `__switch` → `run_tasks` | 回到就绪队列，经 idle 重新选择；切换前释放内部借用。 |
-| `exit_current_and_run_next`，随后父进程 `sys_waitpid` | `Zombie`、孤儿移交、数据页释放和最后引用回收分阶段完成。 |
+| 调用链或控制流程 | 触发程序 | 需要解释的状态变化 |
+| --- | --- | --- |
+| `add_initproc` → `INITPROC` 延迟初始化 → `TaskControlBlock::new`，随后 `add_task` | 内核启动 | 独立 PID、内核栈、地址空间、初始 TrapContext 与 `Ready` 状态。 |
+| `sys_fork` → `TaskControlBlock::fork`，随后 syscall 设置子进程返回值并 `add_task` | 启动的 `ch5b_initproc`；`ch5b_forktest_simple` | 用户空间深拷贝、父子关系、子进程内核栈和 `a0=0`。 |
+| `sys_exec` → `TaskControlBlock::exec` | initproc 启动 shell；shell 执行任一程序 | PID 保持，用户程序、页表和入口替换。 |
+| `sys_spawn` → `TaskControlBlock::spawn` → `new`，随后 `add_task` | `ch5_spawn1` | 直接从 ELF 创建子进程并登记父子关系。 |
+| `run_tasks` → `fetch_task` → `TaskManager::fetch` | 启动；`ch5_stride` | 选择最小 stride，按优先级累加整数步长。 |
+| `sys_yield` → `suspend_current_and_run_next` → `schedule` → `__switch` | `ch5b_exit` 中的显式 yield | 进程设为 `Ready` 并入队，保存当前现场、恢复 idle 上下文。 |
+| `exit_current_and_run_next`；父进程随后执行 `sys_waitpid` | `ch5_spawn1`；`ch5b_exit` | `Zombie`、退出码、用户数据页释放和成功等待后的回收。 |
+| 退出进程的 children 移交 `INITPROC` | `ch5b_forktree` | 子进程 parent 更新、INITPROC 接管和后续等待。 |
+
+`__switch` 恢复 idle 保存的现场，`run_tasks` 从原有切换位置继续执行；这一步是上下文恢复，不是 `__switch` 对 `run_tasks` 的普通函数调用。分别在切换两侧记录调用栈与栈指针。
 
 参考分支将等待回收和优先级逻辑写在 `sys_waitpid`、`sys_set_priority` 中，API 已拆为 `TaskControlBlock::waitpid`、`set_priority`。参考 `exec` 没有更新堆边界，API 要求重置 `heap_bottom`、`program_brk`，应按契约实现。分析还需说明退出路径为何主动释放局部 `Arc`，以及 `TaskContext` 与 TrapContext 的不同用途。
 
