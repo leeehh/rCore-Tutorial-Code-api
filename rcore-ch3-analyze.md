@@ -61,11 +61,13 @@ info registers a0 a1 ra sp
 x/14gx $a1
 ```
 
-`__switch` 入口的 `a0` 指向待保存上下文，`a1` 指向待恢复上下文。结合 `TaskContext` 的布局，解释读取的 14 个机器字如何对应 `ra`、`sp` 和 `s0`–`s11`。首次启动时下一任务的 `ra` 指向恢复应用的入口，不能把它当成某次普通函数调用的返回地址。
+`__switch` 入口的 `a0` 指向待保存上下文，`a1` 指向待恢复上下文。结合 `TaskContext` 的布局，解释读取的 14 个机器字如何对应 `ra`、`sp` 和 `s0`–`s11`。首次启动时下一任务的 `ra` 指向恢复应用的入口。继续在 `__restore` 停下时，`sp` 指向 Trap 上下文，可用 `x/34gx $sp` 观察，再从其中的 `sepc` 设置用户入口断点。
 
 ### 观察任务暂停
 
 ```gdb
+tbreak os::syscall::process::sys_yield
+continue
 tbreak os::task::suspend_current_and_run_next
 continue
 bt 6
@@ -75,19 +77,23 @@ info registers a0 a1 sp
 x/14gx $a1
 ```
 
-从调用栈判断暂停来自 `sys_yield` 还是时钟中断，并对照源码说明当前任务怎样从 `Running` 变成 `Ready`、后继任务如何选中。断在 `__switch` 入口时保存指令尚未执行，因此不能把此时 `a0` 指向的旧内容当成本次刚保存的现场。
+这里先选中 `sys_yield` 主动让出路径，记录调用栈，并对照源码说明当前任务怎样从 `Running` 变成 `Ready`、后继任务如何选中。`__switch` 入口的 `a0` 是待保存位置，`a1` 是待恢复位置。
 
-不要用一次普通 `finish` 来推断整个任务切换已结束：切换会改变栈和返回地址，原任务要等再次被调度才会继续。GDB 在汇编边界的回溯也可能不完整，可结合 `disassemble __switch` 与源码判断。
+记录这次 `__switch` 入口的 `ra` 和 `sp`，在保存的 `ra` 地址设置断点，并以 `sp` 等于保存值作为条件；命中后检查原任务的调用栈与上下文，观察其恢复执行。结合 `disassemble __switch` 阅读保存和恢复寄存器的过程。
 
 ## 3. 需要追踪的调用链
 
-| 调用链 | 需要解释的状态变化 |
-| --- | --- |
-| `rust_main` → `run_first_task` → `TASK_MANAGER` 初始化与访问 → `__switch` → `__restore` | 应用数量、任务初始状态、首个任务上下文和启动后状态。 |
-| `sys_yield` 或时钟中断 → `suspend_current_and_run_next` → 选择就绪任务 → `__switch` | 轮转顺序、当前任务编号、暂停后保存的执行进度，以及恢复后如何返回原调用点。 |
-| `sys_exit` 或应用异常 → `exit_current_and_run_next` → 后继任务 | `Exited` 为什么不能再次调度；没有就绪任务时参考实现怎样结束。 |
+这些箭头包含普通调用和上下文转移。用各阶段的断点记录说明执行过程，不要求它们同时出现在一个调用栈中。
 
-同时说明为什么必须在上下文切换前释放任务管理状态的借用，以及任务切换怎样保持各任务的系统调用计数独立。
+| 调用链 | 触发与观察任务 |
+| --- | --- |
+| `rust_main` → `run_first_task` → `TASK_MANAGER` 初始化与访问 → `__switch` → `__restore` | 启动时记录应用数量、首个任务上下文及进入用户态的过程；结合初始化循环说明任务槽位状态。 |
+| `sys_yield` → `suspend_current_and_run_next` → 选择就绪任务 → `__switch`，随后恢复原任务 | `ch3b_yield0/1/2` 主动让出，按样例记录当前任务、后继任务、上下文及原任务返回点。 |
+| 时钟中断 → `set_next_trigger` → `suspend_current_and_run_next` → `__switch` | 在 `trap_handler` 设置条件 `$scause == 0x8000000000000005` 的断点，记录时钟抢占的调用栈和后续切换。 |
+| `sys_exit` 或应用异常 → `exit_current_and_run_next` → 后继任务 | hello/power/yield 正常结束或 bad 指令应用异常时，记录退出入口与后继任务；通过源码阅读说明 `Exited` 的排除规则和没有就绪任务时的结束分支。 |
+| `syscall` → `record_current_syscall`；`sys_trace` → `current_syscall_count` | 在计数记录处比较两个不同任务的编号与计数单元；阅读 `sys_trace` 的查询路径，说明每任务独立计数和先计数后分发的顺序。 |
+
+阅读切换前的 `drop(inner)`，结合后继任务再次进入任务管理接口的记录，说明借用释放与上下文指针有效性的关系。
 
 ## 4. 报告要求
 
