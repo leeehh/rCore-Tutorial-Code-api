@@ -10,7 +10,7 @@
 make build MODE=debug BASE=2
 ```
 
-内核使用 `MODE=debug`，用户程序与文件系统镜像保持 release 构建；日常运行和实验验收继续使用原有命令。
+内核使用 `MODE=debug`，进程内核栈为 64 KiB；用户程序与文件系统镜像保持 release 构建。日常运行和实验验收继续使用原有命令，release 内核栈仍为 8 KiB。
 
 先按下表阅读源码：
 
@@ -58,7 +58,7 @@ p name
 p flags
 ```
 
-启动时加载初始应用即可命中。`name` 是带长度的 Rust 字符串，按 `length` 判断内容，不把指针后面的相邻字节算入文件名。结合 `list`、`next` 确认当前打开标志及执行分支；`CREATE`、`TRUNC` 的其他分支可先静态阅读，不要求另造场景。每次打开创建新的 `OSInode`，克隆文件描述符中的 `Arc` 则共享已有打开偏移。
+启动时加载初始应用即可命中。`name` 是带长度的 Rust 字符串，按 `length` 判断内容，不把指针后面的相邻字节算入文件名。结合 `list`、`next` 确认当前打开标志及执行分支；创建和清空路径使用下表中的既有程序观察。每次打开创建新的 `OSInode`，克隆文件描述符中的 `Arc` 则共享已有打开偏移。
 
 ### 观察加载文件内容
 
@@ -70,19 +70,23 @@ info args
 p *self
 ```
 
-观察 `inner.offset`、每次读取的 `len` 和返回向量 `v` 如何累积。局部值须执行到初始化后再用 `info locals` 检查。此处读取 ELF 的现场说明加载路径，不代表已动态覆盖用户写文件或硬链接。
+观察 `inner.offset`、每次读取的 `len` 和返回向量 `v` 如何累积。局部值须执行到初始化后再用 `info locals` 检查。将本次 ELF 加载与下表中的用户文件读写调用方对应起来。
 
-若函数名未解析，用 `info functions read_all` 查询符号。GDB 读取内存使用当前地址转换环境，不直接把 syscall 的用户地址指针当作内核字符串。
+结合下表梳理各项文件操作。读取 syscall 文件名时观察已有地址转换后的内核字符串；读取 `&str` 时按其长度取内容。
 
 ## 3. 需要追踪的调用链
 
-| 调用链 | 需要解释的状态变化 |
-| --- | --- |
-| `sys_open` → `open_file` → `Inode::find/create/clear` | 名称定位、创建或截断、新打开对象和描述符分配。 |
-| `sys_read` → `OSInode::read` → `Inode::read_at` → `DiskInode::read_at` | 分片缓冲区、实际读取长度和打开偏移。 |
-| `sys_write` → `OSInode::write` → `Inode::write_at` → `increase_size` | 文件扩容、数据和间接索引块、缓存同步。 |
-| `sys_linkat` / `sys_unlinkat` → `link_file` / `unlink_file` → `Inode::link/unlink` | 同 inode 的多个名称、链接数、目录空槽与最后链接回收。 |
-| `sys_fstat` → `OSInode::stat` → `Inode::stat` | inode 编号、最新链接数与文件类型。 |
+| 调用链 | 触发程序或操作 | 需要解释的状态变化 |
+| --- | --- | --- |
+| `open_file` → `Inode::find`，随后 `OSInode::read_all` → `Inode::read_at` | 内核启动加载初始程序 | 打开对象、当前偏移和 ELF 内容读取。 |
+| `sys_open` → `open_file` → `Inode::find/create` | 新镜像中运行 `ch6_file0` | 名称定位、新 inode、目录项和描述符分配。 |
+| `open_file` → `Inode::clear` → `clear_inode_data` | 同一 QEMU 中再次运行 `ch6_file0` | CREATE 打开已有文件会清空内容，保留 inode 身份和链接数。 |
+| `sys_read` → `OSInode::read` → `Inode::read_at` → `DiskInode::read_at` | `ch6_file0` | 分片缓冲区、实际读取长度和打开偏移。 |
+| `sys_write` → `OSInode::write` → `Inode::write_at` → `increase_size` | `ch6_file0`；`ch6_file3` | 文件扩容、直接及间接索引块、缓存同步。 |
+| `sys_linkat/sys_unlinkat` → `link_file/unlink_file` → `Inode::link/unlink` | `ch6_file2` | 多个名称共享 inode、链接数增减、空目录项和最后链接回收。 |
+| `sys_fstat` → `OSInode::stat` → `Inode::stat` | `ch6_file1` 或 `ch6_file2` | inode 编号、最新链接数与文件类型。 |
+
+两次 `ch6_file0` 在同一次 QEMU 运行中完成，保留第一次创建的 `fname`。`ch6_file2` 正常结束会删除其全部链接；`ch6_file3` 的大文件写入用于观察间接块分配及回收。
 
 解释磁盘 inode 与打开偏移的分工、`nlink` 与 `Arc` 数量的区别、`clear` 和最后一次 `unlink` 的资源归属，以及文件系统锁与块缓存锁为何不能重入。API 配套 `exec` 已补充重置栈和堆边界，与参考 `ch6` 此处不同；该提供实现不属于文件实验的 TODO。
 
