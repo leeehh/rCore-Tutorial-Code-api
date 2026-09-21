@@ -76,20 +76,23 @@ bt 6
 info registers satp
 ```
 
-记录用户页表的 `token`、缓冲区首地址 `ptr` 和长度 `len`，对照循环分析跨页时如何分割切片。系统调用处理期间运行的是内核页表，当前 `satp` 不应直接当作用户缓冲区的转换依据；函数使用传入的用户 `token` 查询映射。
+记录用户页表的 `token`、缓冲区首地址 `ptr` 和长度 `len`，并观察一次循环中的页号、物理页号和页内偏移。系统调用处理期间运行的是内核页表，函数使用传入的用户 `token` 查询映射。
 
-断点使用的函数名称应以 `info functions` 显示的完整名称为准。GDB 的内存读取使用当前地址转换环境，不要直接把用户虚拟地址作为内核中的可访问地址。短缓冲区未跨页时，应将跨页处理写作源码分析，不声称已经动态覆盖。
+使用 `info functions` 查找完整函数名称。根据页表转换结果读取物理页内容，并通过源码阅读说明循环如何处理跨页范围、页内偏移与物理不连续的页面。
 
 ## 3. 需要追踪的调用链
 
-| 调用链 | 需要解释的状态变化 |
+| 调用链 | 触发与观察任务 |
 | --- | --- |
-| `mm::init` → `KERNEL_SPACE` 初始化（`new_kernel` → `MapArea::map` → `PageTable::map`），随后调用 `MemorySet::activate` | 恒等映射、跳板页、段权限、三级页表与 `satp` 激活。 |
-| `TaskControlBlock::new` → `MemorySet::from_elf` → ELF 段、栈和 Trap 上下文映射 | 各应用数据页独立，保护页不映射，内核专用页不设置 `U`。 |
-| `sys_write` → `translated_byte_buffer` → `PageTable::from_token` → `translate` | 用户页表 token、页号与页内偏移，虚拟连续但物理不连续时的缓冲区表示。 |
-| `mmap` / `munmap` / `sbrk` → `MemorySet` → `MapArea` → 页表与页帧操作 | 建立、移除或调整逻辑段后，映射、段记录和页帧所有权如何一致。 |
+| `mm::init` → `KERNEL_SPACE` 初始化（`new_kernel` → `MapArea::map` → `PageTable::map`），随后调用 `MemorySet::activate` | 启动时记录一次映射及页表层级；在 `activate` 前后记录 `satp`，跟踪 `remap_test` 对内核段权限的检查。 |
+| `TaskControlBlock::new` → `MemorySet::from_elf` → ELF 段、栈和 Trap 上下文映射 | 在应用创建时记录用户栈边界，查看保护页、Trap 上下文和跳板页的映射权限；比较两个应用的页表及数据页，说明其独立性。 |
+| `sys_write` → `translated_byte_buffer` → `PageTable::from_token` → `translate` | hello/power 输出时动态记录一次缓冲区转换；通过源码阅读解释跨页切片的构造与字节顺序。 |
+| `sys_mmap` → 任务的 `mmap` → `MemorySet::insert_framed_area` → `MapArea::map` → `PageTable::map` | `ch4_mmap0` 建立可读写映射，`ch4_mmap1` 写只读页触发异常；先在 `sys_mmap` 停下，再记录对应的映射参数和权限。 |
+| `sys_munmap` → 任务的 `munmap` → `MemorySet::remove_framed_area` → `MapArea::unmap` | `ch4_unmap` 解除映射并重新映射，`ch4_unmap2` 检查错误参数；记录页表项变化和 `frame_dealloc` 的回收调用，结合源码说明逻辑段记录与页帧所有权。 |
+| `sys_sbrk` → `change_program_brk` → `MemorySet::append_to` / `shrink_to` → `MapArea` | `ch4b_sbrk` 先扩容再缩容；分别记录正负 `size`、堆边界和映射变化，观察最后写入已释放页的异常。 |
+| `sys_trace` → `PageTable::translate_user` | `ch4_trace1` 读写已映射字节、访问无效地址、写只读页及访问撤销后的映射；记录地址、所需权限和返回结果。 |
 
-`translate_user` 的规范地址及 `V/U/R/W` 检查也应结合调用方分析，区别于仅查询末级 PTE 的 `translate`。
+结合源码说明 `translate_user` 的规范地址和 `V/U/R/W` 检查，以及 `translate` 返回末级 PTE 与允许用户访问之间的区别。
 
 ## 4. 报告要求
 
