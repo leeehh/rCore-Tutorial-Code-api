@@ -32,3 +32,21 @@ __pycache__/
 !/.ai/events/**
 !/.ai/submissions/
 !/.ai/submissions/**
+
+# Local recording runtime and client configuration.
+/.ai/course-tools/
+/.ai/ide/
+/.opencode/session-archive.json
+/.opencode/rcore-hooks/
+/.opencode/plugins/rcore-session-archive.js
+
+# >>> course-tool records
+!/.ai/
+!/.ai/.gitignore
+!/.ai/agent-sessions/
+!/.ai/agent-sessions/**
+!/.ai/events/
+!/.ai/events/**
+!/.ai/submissions/
+!/.ai/submissions/**
+# <<< course-tool records
