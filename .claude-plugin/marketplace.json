@@ -1,0 +1,13 @@
+{
+  "name": "rcore-tutorial-code",
+  "owner": {
+    "name": "Course Tool"
+  },
+  "plugins": [
+    {
+      "name": "rcore-session-archive",
+      "source": "./plugins/rcore-session-archive",
+      "description": "Save coding-agent conversations as local JSONL in the project."
+    }
+  ]
+}
