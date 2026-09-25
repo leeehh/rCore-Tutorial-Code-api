@@ -25,7 +25,7 @@ AI过程记录：启动时默认使用 `auto`，可通过 `python3 course.py --a
 
 **Codex 首次使用需要信任 hooks**：安装完成后，在实验仓库根目录的终端运行 `codex`，进入后输入 `/hooks`，找到 `rcore-session-archive` 的 `Stop` 和 `SessionEnd`，分别审阅并选择 **Trust（信任）**。未信任时不会自动保存会话。使用 VS Code Codex 的同学完成后还需重载窗口并新建会话；更新插件后，如提示 hooks 发生变化，请重新审阅并信任。
 
-记录功能与验证：[实验过程记录工具功能说明](https://github.com/leeehh/rCore-Tutorial-Code-api/blob/main/docs/course-monitor-report.md)。工具只在 `main` 分支分发；安装一次后，切换到 `ch1`–`ch8` 仍会记录。实验分支可使用 `git course logs` 查看日志，使用 `git agent-plugins auto` 再次配置 AI 归档。
+记录功能与验证：[实验过程记录工具功能说明](https://github.com/leeehh/rCore-Tutorial-Code-api/blob/main/docs/course-monitor-report.md)。main 和各实验分支均提供 `course.py` 及完整运行依赖；安装一次后，切换到 `ch1`–`ch8` 仍会记录。实验分支可使用 `git course logs` 查看日志，使用 `git agent-plugins auto` 再次配置 AI 归档。
 
 ## 历史文档参考
 
