@@ -1,6 +1,8 @@
 {
   "name": "rcore-tutorial-code",
-  "owner": { "name": "rCore Tutorial" },
+  "owner": {
+    "name": "Course Tool"
+  },
   "plugins": [
     {
       "name": "rcore-session-archive",
