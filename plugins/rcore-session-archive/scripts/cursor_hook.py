@@ -26,7 +26,7 @@ COMMAND = 'python3 ".cursor/rcore-hooks/cursor_hook.py"'
 
 
 def warn(message):
-    print(f"[rCore Cursor] {message}", file=sys.stderr)
+    print(f"[Course Cursor] {message}", file=sys.stderr)
 
 
 def handle(payload, project_root=None):
